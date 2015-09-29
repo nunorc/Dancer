@@ -1,4 +1,5 @@
 package Dancer::Object::Singleton;
+#ABSTRACT: Singleton base class for Dancer
 
 # This class is a root class for singleton objects in Dancer.
 # It provides basic OO singleton tools for Perl5 without being... MooseX::Singleton ;-)
@@ -6,6 +7,7 @@ package Dancer::Object::Singleton;
 use strict;
 use warnings;
 use Carp;
+use Dancer::Exception qw(:all);
 
 use base qw(Dancer::Object);
 
@@ -15,12 +17,12 @@ my %instances;
 # constructor
 sub new {
     my ($class) = @_;
-    croak "you can't call 'new' on $class, as it's a singleton. Try to call 'instance'";
+    raise core => "you can't call 'new' on $class, as it's a singleton. Try to call 'instance'";
 }
 
 sub clone {
     my ($class) = @_;
-    croak "you can't call 'clone' on $class, as it's a singleton. Try to call 'instance'";
+    raise core => "you can't call 'clone' on $class, as it's a singleton. Try to call 'instance'";
 }
 
 sub instance {
@@ -61,10 +63,6 @@ sub _setter_code {
 
 __END__
 
-=head1 NAME
-
-Dancer::Object::Singleton - Singleton base class for Dancer
-
 =head1 SYNOPSIS
 
     package My::Dancer::Extension;
@@ -87,7 +85,7 @@ Dancer::Object::Singleton - Singleton base class for Dancer
 
 =head1 DESCRIPTION
 
-Dancer::Object::Singleton is meantto be used instead of Dancer::Object, if you
+Dancer::Object::Singleton is meant to be used instead of Dancer::Object, if you
 want your object to be a singleton, that is, a class that has only one instance
 in the application.
 
@@ -114,18 +112,4 @@ Get the attributes of the specific class.
 Generates attributes for whatever object is extending Dancer::Object and saves
 them in an internal hashref so they can be later fetched using
 C<get_attributes>.
-
-=head1 AUTHOR
-
-Damien Krotkine
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2010 Damien Krotkine.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
 

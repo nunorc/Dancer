@@ -1,4 +1,5 @@
 package Dancer::Object;
+#ABSTRACT: Objects base class for Dancer
 
 # This class is a root class for each object in Dancer.
 # It provides basic OO tools for Perl5 without being... Moose ;-)
@@ -6,6 +7,7 @@ package Dancer::Object;
 use strict;
 use warnings;
 use Carp;
+use Dancer::Exception qw(:all);
 
 # constructor
 sub new {
@@ -18,7 +20,7 @@ sub new {
 
 sub clone {
     my ($self) = @_;
-    croak "The 'Clone' module is needed"
+    raise core => "The 'Clone' module is needed"
         unless Dancer::ModuleLoader->load('Clone');
     return Clone::clone($self);
 }
@@ -31,7 +33,7 @@ my $_attrs_per_class = {};
 sub get_attributes {
     my ($class, $visited_parents) = @_;
     # $visited_parents keeps track of parent classes we already handled, to
-    # avoid infinite recursion (in case of dependancies loop). It's not stored as class singleton, otherwise
+    # avoid infinite recursion (in case of dependencies loop). It's not stored as class singleton, otherwise
     # get_attributes wouldn't be re-entrant.
     $visited_parents ||= {};
     my @attributes = @{$_attrs_per_class->{$class} || [] };
@@ -98,10 +100,6 @@ sub attributes_defaults {
 1;
 
 __END__
-
-=head1 NAME
-
-Dancer::Object - Objects base class for Dancer
 
 =head1 SYNOPSIS
 
@@ -178,18 +176,4 @@ structure changes in the future.
 
 given a hash (not a hashref), makes sure an object has the given attributes
 default values. Usually called from within an C<init> function.
-
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2010 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
 

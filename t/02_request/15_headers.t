@@ -4,7 +4,7 @@ use warnings;
 
 plan skip_all => "skip test with Test::TCP in win32" if $^O eq 'MSWin32';
 plan skip_all => 'Test::TCP is needed to run this test'
-    unless Dancer::ModuleLoader->load('Test::TCP' => "1.13");
+    unless Dancer::ModuleLoader->load('Test::TCP' => "1.30");
 
 use LWP::UserAgent;
 
@@ -41,7 +41,7 @@ Test::TCP::test_tcp(
              show_errors  => 1,
              startup_info => 0 );
 
-        after sub {
+        hook after => sub {
             my $response = shift;
             $response->header('X-Foo', 2);
         };

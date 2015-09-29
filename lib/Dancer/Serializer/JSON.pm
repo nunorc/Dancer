@@ -1,4 +1,5 @@
 package Dancer::Serializer::JSON;
+#ABSTRACT: serializer for handling JSON data
 
 use strict;
 use warnings;
@@ -6,6 +7,7 @@ use Carp;
 use Dancer::ModuleLoader;
 use Dancer::Deprecation;
 use Dancer::Config 'setting';
+use Dancer::Exception qw(:all);
 use base 'Dancer::Serializer::Abstract';
 
 
@@ -23,11 +25,11 @@ sub to_json {
 
 # class definition
 
-sub loaded { Dancer::ModuleLoader->load('JSON') }
+sub loaded { Dancer::ModuleLoader->load_with_params('JSON', '-support_by_pp') }
 
 sub init {
     my ($self) = @_;
-    croak 'JSON is needed and is not installed'
+    raise core_serializer => 'JSON is needed and is not installed'
       unless $self->loaded;
 }
 
@@ -35,18 +37,16 @@ sub serialize {
     my $self   = shift;
     my $entity = shift;
 
-    my $options = $self->_options_as_hashref(@_) || {};
+    my $options = $self->_serialize_options_as_hashref(@_) || {};
 
-    # Why doesn't $self->config have this?
     my $config = setting('engines') || {};
     $config = $config->{JSON} || {};
 
-    if ( $config->{allow_blessed} && !defined $options->{allow_blessed} ) {
-        $options->{allow_blessed} = $config->{allow_blessed};
-    }
-    if ( $config->{convert_blessed} ) {
-        $options->{convert_blessed} = $config->{convert_blessed};
-    }
+    # straight pass through of config options to JSON
+    map { $options->{$_} = $config->{$_} } keys %$config;
+
+    # pull in config from serializer init as well (and possibly override settings from the conf file)
+    map { $options->{$_} = $self->config->{$_} } keys %{$self->config};
 
     if (setting('environment') eq 'development' and not defined $options->{pretty}) {
         $options->{pretty} = 1;
@@ -59,8 +59,23 @@ sub deserialize {
     my $self   = shift;
     my $entity = shift;
 
-    my $options = $self->_options_as_hashref(@_);
+    my $options = $self->_deserialize_options_as_hashref(@_);
     JSON::from_json( $entity, $options );
+}
+
+# Standard JSON behaviour is fine when serializing; we'll end up
+# encoding as UTF8 later on.
+sub _serialize_options_as_hashref {
+    return shift->_options_as_hashref(@_);
+}
+
+# JSON should be UTF8 by default, so explicitly decode it as such
+# on its way in.
+sub _deserialize_options_as_hashref {
+    my $self = shift;
+    my $options = $self->_options_as_hashref(@_) || {};
+    $options->{utf8} = 1 if !exists $options->{utf8};
+    return $options;
 }
 
 sub _options_as_hashref {
@@ -88,10 +103,6 @@ sub content_type {'application/json'}
 1;
 __END__
 
-=head1 NAME
-
-Dancer::Serializer::JSON - serializer for handling JSON data
-
 =head1 SYNOPSIS
 
 =head1 DESCRIPTION
@@ -107,14 +118,17 @@ This can be done in your config.yml file or directly in your app code with the
 B<set> keyword. This serializer will also be used when the serializer is set
 to B<mutable> and the correct Accept headers are supplied.
 
-The L<JSON> module has 2 configuration variables that can be useful when working
-with ORM's like L<DBIx::Class>: B<allow_blessed> and B<convert_blessed>.
-Please consult the L<JSON> documentation for more information. You can add
-extra settings to the B<engines> configuration to turn these on.
+The L<JSON> module will pass configuration variables straight through.
+Some of these can be useful when debugging/developing your app: B<pretty> and
+B<canonical>, and others useful with ORMs like L<DBIx::Class>: B<allow_blessed>
+and B<convert_blessed>.  Please consult the L<JSON> documentation for more
+information and a full list of configuration settings. You can add extra
+settings to the B<engines> configuration to turn these on. For example:
 
     engines:
         JSON:
-            allow_blessed: '1'
+            allow_blessed:   '1'
+            canonical:       '1'
             convert_blessed: '1'
 
 

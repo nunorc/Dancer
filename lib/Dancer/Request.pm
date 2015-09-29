@@ -1,4 +1,5 @@
 package Dancer::Request;
+#ABSTRACT: interface for accessing incoming requests
 
 use strict;
 use warnings;
@@ -9,6 +10,8 @@ use base 'Dancer::Object';
 use Dancer::Config 'setting';
 use Dancer::Request::Upload;
 use Dancer::SharedData;
+use Dancer::Session;
+use Dancer::Exception qw(:all);
 use Encode;
 use HTTP::Body;
 use URI;
@@ -49,14 +52,14 @@ sub new {
 # aliases
 sub agent                 { $_[0]->user_agent }
 sub remote_address        { $_[0]->address }
-sub forwarded_for_address { $_[0]->env->{'X_FORWARDED_FOR'} }
+sub forwarded_for_address { $_[0]->env->{'X_FORWARDED_FOR'} || $_[0]->env->{'HTTP_X_FORWARDED_FOR'} }
 sub address               { $_[0]->env->{REMOTE_ADDR} }
 sub host {
     if (@_==2) {
         $_[0]->{host} = $_[1];
     } else {
         my $host;
-        $host = $_[0]->env->{X_FORWARDED_HOST} if setting('behind_proxy');
+        $host = ($_[0]->env->{X_FORWARDED_HOST} || $_[0]->env->{HTTP_X_FORWARDED_HOST}) if setting('behind_proxy');
         $host || $_[0]->{host} || $_[0]->env->{HTTP_HOST};
     }
 }
@@ -66,12 +69,18 @@ sub port                  { $_[0]->env->{SERVER_PORT} }
 sub request_uri           { $_[0]->env->{REQUEST_URI} }
 sub user                  { $_[0]->env->{REMOTE_USER} }
 sub script_name           { $_[0]->env->{SCRIPT_NAME} }
+sub request_base          { $_[0]->env->{REQUEST_BASE} || $_[0]->env->{HTTP_REQUEST_BASE} }
 sub scheme                {
     my $scheme;
     if (setting('behind_proxy')) {
+        # PSGI specs say that X_FORWARDED_PROTO will
+        # be converted into HTTP_X_FORWARDED_PROTO
+        # but Dancer::Test doesn't use PSGI (for now)
         $scheme = $_[0]->env->{'X_FORWARDED_PROTOCOL'}
                || $_[0]->env->{'HTTP_X_FORWARDED_PROTOCOL'}
+               || $_[0]->env->{'HTTP_X_FORWARDED_PROTO'}
                || $_[0]->env->{'HTTP_FORWARDED_PROTO'}
+               || $_[0]->env->{'X_FORWARDED_PROTO'}
                || ""
     }
     return $scheme
@@ -87,6 +96,7 @@ sub is_post               { $_[0]->{method} eq 'POST' }
 sub is_get                { $_[0]->{method} eq 'GET' }
 sub is_put                { $_[0]->{method} eq 'PUT' }
 sub is_delete             { $_[0]->{method} eq 'DELETE' }
+sub is_patch              { $_[0]->{method} eq 'PATCH' }
 sub header                { $_[0]->{headers}->header($_[1]) }
 
 # public interface compat with CGI.pm objects
@@ -136,17 +146,26 @@ sub to_string {
 # helper for building a request object by hand
 # with the given method, path, params, body and headers.
 sub new_for_request {
-    my ($class, $method, $path, $params, $body, $headers) = @_;
-    $params ||= {};
+    my ($class, $method, $uri, $params, $body, $headers, $extra_env) = @_;
+    $params    ||= {};
+    $extra_env ||= {};
     $method = uc($method);
 
-    my $req = $class->new(env => { %ENV,
-                                    PATH_INFO      => $path,
-                                    REQUEST_METHOD => $method});
+    my ( $path, $query_string ) = ( $uri =~ /([^?]*)(?:\?(.*))?/s ); #from HTTP::Server::Simple
+
+    my $env = {
+        %ENV,
+        %{$extra_env},
+        PATH_INFO      => $path,
+        QUERY_STRING   => $query_string || $ENV{QUERY_STRING} || '',
+        REQUEST_METHOD => $method
+    };
+    my $req = $class->new(env => $env);
     $req->{params}        = {%{$req->{params}}, %{$params}};
+    $req->_build_params();
     $req->{_query_params} = $req->{params};
     $req->{body}          = $body    if defined $body;
-    $req->{headers}       = $headers if $headers;
+    $req->{headers}       = $headers || HTTP::Headers->new;
 
     return $req;
 }
@@ -176,6 +195,24 @@ sub forward {
     $new_request->{body}    = $request->body;
     $new_request->{headers} = $request->headers;
 
+    if( my $session = Dancer::Session->engine 
+                      && Dancer::Session->get_current_session ) {
+        my $name = $session->session_name;
+
+        # make sure that COOKIE is populated
+        $new_request->{env}{COOKIE} ||= $new_request->{env}{HTTP_COOKIE};
+
+        no warnings;  # COOKIE can be undef
+        unless ( $new_request->{env}{COOKIE} =~ /$name\s*=/ ) {
+            $new_request->{env}{COOKIE} = join ';', 
+                grep { $_ } 
+                $new_request->{env}{COOKIE}, 
+                join '=', $name, Dancer::Session->get_current_session->id;
+        }
+    }
+
+    $new_request->{uploads} = $request->uploads;
+
     return $new_request;
 }
 
@@ -204,7 +241,7 @@ sub base {
 sub _common_uri {
     my $self = shift;
 
-    my $path   = $self->env->{SCRIPT_NAME};
+    my $path   = $self->env->{SCRIPT_NAME} || '';
     my $port   = $self->env->{SERVER_PORT};
     my $server = $self->env->{SERVER_NAME};
     my $host   = $self->host;
@@ -213,7 +250,13 @@ sub _common_uri {
     my $uri = URI->new;
     $uri->scheme($scheme);
     $uri->authority($host || "$server:$port");
-    $uri->path($path      || '/');
+    if (setting('behind_proxy')) {
+        my $request_base = $self->env->{REQUEST_BASE} || $self->env->{HTTP_REQUEST_BASE} || '';
+        $uri->path($request_base . $path || '/');
+    }
+    else {
+        $uri->path($path || '/');
+    }
 
     return $uri;
 }
@@ -274,7 +317,7 @@ sub params {
         return $self->{_route_params};
     }
     else {
-        croak "Unknown source params \"$source\".";
+        raise core_request => "Unknown source params \"$source\".";
     }
 }
 
@@ -302,6 +345,14 @@ sub _decode {
 
 sub is_ajax {
     my $self = shift;
+
+    # when using Plack::Builder headers are not set
+    # so we're checking if it's actually there with PSGI plain headers
+    if ( defined $self->{x_requested_with} ) {
+        if ( $self->{x_requested_with} eq "XMLHttpRequest" ) {
+            return 1;
+        }
+    }
 
     return 0 unless defined $self->headers;
     return 0 unless defined $self->header('X-Requested-With');
@@ -346,17 +397,18 @@ sub _build_request_env {
    # Don't refactor that, it's called whenever a request object is needed, that
    # means at least once per request. If refactored in a loop, this will cost 4
    # times more than the following static map.
-    $self->{user_agent}       = $self->env->{HTTP_USER_AGENT};
-    $self->{host}             = $self->env->{HTTP_HOST};
-    $self->{accept_language}  = $self->env->{HTTP_ACCEPT_LANGUAGE};
-    $self->{accept_charset}   = $self->env->{HTTP_ACCEPT_CHARSET};
-    $self->{accept_encoding}  = $self->env->{HTTP_ACCEPT_ENCODING};
-    $self->{keep_alive}       = $self->env->{HTTP_KEEP_ALIVE};
-    $self->{connection}       = $self->env->{HTTP_CONNECTION};
-    $self->{accept}           = $self->env->{HTTP_ACCEPT};
-    $self->{accept_type}      = $self->env->{HTTP_ACCEPT_TYPE};
-    $self->{referer}          = $self->env->{HTTP_REFERER};
-    $self->{x_requested_with} = $self->env->{HTTP_X_REQUESTED_WITH};
+    my $env = $self->env;
+    $self->{user_agent}       = $env->{HTTP_USER_AGENT};
+    $self->{host}             = $env->{HTTP_HOST};
+    $self->{accept_language}  = $env->{HTTP_ACCEPT_LANGUAGE};
+    $self->{accept_charset}   = $env->{HTTP_ACCEPT_CHARSET};
+    $self->{accept_encoding}  = $env->{HTTP_ACCEPT_ENCODING};
+    $self->{keep_alive}       = $env->{HTTP_KEEP_ALIVE};
+    $self->{connection}       = $env->{HTTP_CONNECTION};
+    $self->{accept}           = $env->{HTTP_ACCEPT};
+    $self->{accept_type}      = $env->{HTTP_ACCEPT_TYPE};
+    $self->{referer}          = $env->{HTTP_REFERER};
+    $self->{x_requested_with} = $env->{HTTP_X_REQUESTED_WITH};
 }
 
 sub _build_headers {
@@ -371,7 +423,7 @@ sub _build_params {
     # _before_ we get there, so we have to save it first
     my $previous = $self->{params};
 
-    # now parse environement params...
+    # now parse environment params...
     $self->_parse_get_params();
     if ($self->is_forward) {
         $self->{_body_params} ||= {};
@@ -402,7 +454,7 @@ sub _build_path {
         $path ||= $self->_url_decode($self->request_uri);
     }
 
-    croak "Cannot resolve path" if not $path;
+    raise core_request => "Cannot resolve path" if not $path;
     $self->{path} = $path;
 }
 
@@ -449,7 +501,7 @@ sub _parse_get_params {
 
     my $source = $self->env->{QUERY_STRING} || '';
     foreach my $token (split /[&;]/, $source) {
-        my ($key, $val) = split(/=/, $token);
+        my ($key, $val) = split(/=/, $token, 2);
         next unless defined $key;
         $val = (defined $val) ? $val : '';
         $key = $self->_url_decode($key);
@@ -475,24 +527,25 @@ sub _parse_get_params {
 }
 
 sub _read_to_end {
-    my ($self) = @_;
+    my $self = shift;
+    
+    return unless $self->_has_something_to_read;
 
-    my $content_length = $self->content_length;
-    return unless $self->_has_something_to_read();
+    if ( $self->content_length > 0 ) {
+        my $body = '';
 
-    if ($content_length > 0) {
-        while (my $buffer = $self->_read()) {
-            $self->{body} .= $buffer;
-            $self->{_http_body}->add($buffer);
+        while ( my $buffer = $self->_read ) {
+            $body .= $buffer;
         }
+
+        $self->{_http_body}->add( $self->{body} = $body );
     }
 
     return $self->{body};
 }
 
 sub _has_something_to_read {
-    my ($self) = @_;
-    return 0 unless defined $self->input_handle;
+    defined $_[0]->input_handle;
 }
 
 # taken from Miyagawa's Plack::Request::BodyParser
@@ -514,7 +567,7 @@ sub _read {
         return $buffer;
     }
     else {
-        croak "Unknown error reading input: $!";
+        raise core_request => "Unknown error reading input: $!";
     }
 }
 
@@ -559,14 +612,10 @@ __END__
 
 =pod
 
-=head1 NAME
-
-Dancer::Request - interface for accessing incoming requests
-
 =head1 DESCRIPTION
 
 This class implements a common interface for accessing incoming requests in
-a Dancer application.
+a L<< Dancer >> application.
 
 In a route handler, the current request object can be accessed by the C<request>
 method, like in the following example:
@@ -601,7 +650,7 @@ Used internally to define some default values and parse parameters.
 
 =head2 new_for_request($method, $path, $params, $body, $headers)
 
-An alternate constructor convienient for test scripts which creates a request
+An alternate constructor convenient for test scripts which creates a request
 object with the arguments given.
 
 =head2 forward($request, $new_location)
@@ -616,6 +665,10 @@ will use. Optional values are the key C<params> to a hash of
 parameters to be added to the current request parameters, and the key
 C<options> that points to a hash of options about the redirect (for
 instance, C<method> pointing to a new request method).
+
+=head2 is_forward
+
+Flag that will be set to true if the request has been L<forwarded|Dancer::Request::forward>.
 
 =head2 to_string()
 
@@ -678,6 +731,10 @@ Return true if the method requested by the client is 'GET'
 
 Return true if the method requested by the client is 'HEAD'
 
+=head2 is_patch()
+
+Return true if the method requested by the client is 'PATCH'
+
 =head2 is_post()
 
 Return true if the method requested by the client is 'POST'
@@ -731,6 +788,8 @@ If called in list context, returns a list of key => value pairs, so you could us
 
     my %allparams = params;
 
+If the incoming form data contains multiple values for the same key, they will
+be returned as an arrayref.
 
 =head3 Fetching only params from a given source
 
@@ -785,6 +844,10 @@ Return the value of the given header, if present. If the header has multiple
 values, returns an the list of values if called in list context, the first one
 in scalar.
 
+=head2 headers()
+
+Returns the L<HTTP::Header> object used to store all the headers.
+
 =head2 body()
 
 Return the raw body of the request, unparsed.
@@ -799,7 +862,12 @@ Return true if the value of the header C<X-Requested-With> is XMLHttpRequest.
 
 =head2 env()
 
-Return the current environment (C<%ENV>), as a hashref.
+Return the current environment as a hashref.
+
+Note that a request's environment is not always reflected by the global
+variable C<%ENV> (e.g., when running via L<Plack::Handler::FCGI>). In
+consequence, it is recommended to always rely on the values returned by
+C<env()>, and not to access C<%ENV> directly.
 
 =head2 uploads()
 
@@ -817,7 +885,7 @@ table provided by C<uploads()>. It looks at the calling context and returns a
 corresponding value.
 
 If you have many file uploads under the same name, and call C<upload('name')> in
-an array context, the accesor will unroll the ARRAY ref for you:
+an array context, the accessor will unroll the ARRAY ref for you:
 
     my @uploads = request->upload('many_uploads'); # OK
 
@@ -828,6 +896,23 @@ in @uploads, being the ARRAY ref:
 
 That is why this accessor should be used instead of a manual access to
 C<uploads>.
+
+=head1 Values
+
+Given a request to http://perldancer.org:5000/request-methods?a=1 these are
+the values returned by the various request->  method calls:
+
+  base         http://perldancer.org:5000/
+  host         perldancer.org
+  uri_base     http://perldancer.org:5000
+  uri          /request-methods?a=1
+  request_uri  /request-methods?a=1
+  path         /request-methods
+  path_info    /request-methods
+  method       GET
+  port         5000
+  protocol     HTTP/1.1
+  scheme       http
 
 =head1 HTTP environment variables
 
@@ -865,6 +950,8 @@ Dancer::Request object through specific accessors, here are those supported:
 =item C<referer>
 
 =item C<remote_address>
+
+=item C<request_base>
 
 =item C<user_agent>
 

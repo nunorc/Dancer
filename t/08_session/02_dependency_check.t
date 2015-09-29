@@ -40,7 +40,7 @@ mock 'Dancer::Session::YAML'
 # when YAML is not here...
 $mock_loads->{'Dancer::Session::YAML'} = 0;
 eval { set(session => 'YAML') };
-like($@, qr/perhaps you need to install Dancer::Session::YAML/,
+like($@, qr/unable to load session engine 'YAML'/,
     "the YAML session engine depends on YAML");
 
 # when present, I CAN HAZ
@@ -50,6 +50,6 @@ is($@, '', "the session engine can be set with CGI::Session");
 
 # load an unknown session engine
 eval { set(session => 'galactica') };
-like $@, qr/unknown session engine 'galactica'/, 
+like $@, qr/unable to load session engine 'galactica'/,
     "Unknown session engine is refused";
 

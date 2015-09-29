@@ -1,7 +1,5 @@
-
-=head1 NAME
-
-Dancer::Development - guide for developers interested in contributing
+# PODNAME: Dancer::Development
+# ABSTRACT: guide for developers interested in contributing
 
 =head1 DESCRIPTION
 
@@ -35,7 +33,7 @@ Feel free to spread the word in whatever way you consider fit and drop us a
 line on the Dancer user mailing list noted below.
 
 Also, if you're using and enjoying Dancer,
-L<http://cpanratings.perl.org/dist/Dancer|rating us on cpanratings.perl.org>,
+L<rating us on cpanratings.perl.org|http://cpanratings.perl.org/dist/Dancer>,
 explaining what you like about Dancer is another very valuable contribution that
 helps other new users find us!
 
@@ -48,7 +46,7 @@ providing assistance to new users is incredibly valuable.
 
 =item *
 
-Mailing list: L<http://lists.perldancer.org/cgi-bin/listinfo/dancer-users> to
+Mailing list: L<http://lists.preshweb.co.uk/mailman/listinfo/dancer-users> to
 subscribe or view archives
 
 =item *
@@ -100,12 +98,12 @@ A good way to help the project is to find a failing build log on the CPAN
 testers: L<http://www.cpantesters.org/distro/D/Dancer.html>
 
 If you find a failing test report, feel free to report it as a GitHub issue:
-L<http://github.com/sukria/Dancer/issues>.
+L<https://github.com/PerlDancer/Dancer/issues>.
 
 =head2 Reporting Bugs
 
 We prefer to have all our bug reports on GitHub, in the issues section:
-L<http://github.com/sukria/Dancer/issues>. It's possible though to report bugs
+L<https://github.com/PerlDancer/Dancer/issues>. It's possible though to report bugs
 on RT as well: L<https://rt.cpan.org/Dist/Display.html?Queue=Dancer>
 
 Please make sure the bug you're reporting does not yet exist. In doubt please
@@ -130,7 +128,7 @@ Here is the workflow for submitting a patch:
 
 =item *
 
-Fork the repository L<http://github.com/sukria/Dancer> (click "Fork")
+Fork the repository L<https://github.com/PerlDancer/Dancer> (click "Fork")
 
 =item *
 
@@ -143,7 +141,7 @@ Clone your fork to have a local copy using the following command:
 As a contributor, you should B<always> work on the C<devel> branch of
 your clone (C<master> is used only for building releases).
 
-    $ git remote add upstream https://github.com/sukria/Dancer.git
+    $ git remote add upstream https://github.com/PerlDancer/Dancer.git
     $ git fetch upstream
     $ git checkout -b devel upstream/devel
 
@@ -247,7 +245,7 @@ but with the C<frozen> branch.
 =head2 Mailing Lists
 
 A mailing list is available here:
-L<http://lists.perldancer.org/cgi-bin/listinfo/dancer-users>
+L<http://lists.preshweb.co.uk/mailman/listinfo/dancer-users>
 
 =head2 IRC Channels
 
@@ -258,7 +256,7 @@ from users and contributors.
 =head2 Repositories
 
 The official repository is hosted on GitHub at the following location:
-L<http://github.com/sukria/Dancer>.
+L<https://github.com/PerlDancer/Dancer>.
 
 Official developers have write access to this repository, contributors are
 invited to fork it if they want to submit patches, as explained in the
@@ -279,6 +277,91 @@ This is the development branch. New features are pushed here, and will be merged
 to master when the next release is being prepared.
 
 =back
+
+=head3 Working with the devel branch
+
+The distribution is managed with L<Dist::Zilla>.
+This means than many of the usual files you might expect
+are not in the repository, but are generated at release time.
+
+However, you can run tests directly using the 'prove' tool:
+
+    $ prove -l
+    $ prove -lv t/some_test_file.t
+    $ prove -lvr t/
+
+In most cases, 'prove' is entirely sufficent for you to test any
+patches you have.
+
+You may need to satisfy some dependencies. The easiest way to satisfy
+dependencies is to install the last release -- this is available at
+L<https://metacpan.org/release/Dancer>.
+
+If you use cpanminus, you can do it without downloading the tarball first:
+
+    $ cpanm --reinstall --installdeps --with-recommends Dancer
+
+Dist::Zilla is a very powerful authoring tool, but requires a number of
+author-specific plugins. If you would like to use it for contributing,
+install it from CPAN, then run one of the following commands, depending on
+your CPAN client:
+
+    # with cpanminus
+    $ dzil authordeps --missing | cpanm
+
+    # with  cpan
+    $ cpan `dzil authordeps --missing`
+
+You should then also install any additional requirements not needed by the
+dzil build but may be needed by tests or other development:
+
+    # with cpanminus
+    $ dzil listdeps --author --missing | cpanm
+
+    # or just plain cpan...
+    $ cpan `dzil listdeps --author --missing`
+
+You can also do this via cpanm directly:
+
+    $ cpanm --reinstall --installdeps --with-develop --with-recommends Dancer
+
+Once installed, here are some dzil commands you might try:
+
+=over
+
+=item $ dzil build
+
+Build the code as it would appears on the final release.
+The tarball of the new distribution will be present in the root
+directory of the repository, and a called C<build/<this_branch>>, where
+I<this_branch> is the current working branch, will also have the product
+of the dzillification of the code.
+
+=item $ dzil test
+
+Run all tests in F</t> against the built code.
+
+=item  $ dzil xtest
+
+Run the author tests (in F</xt>) against the built code.
+
+=item    $ dzil listdeps --json
+
+List all the dependencies, in JSON.
+
+=item $ dzil build --notgz
+
+Build the code, but don't generate the tarball.
+
+=back
+
+=head3 This Is Complicated. Is There an Easier Way?
+
+Actually, yes there is. You can also branch out directly from the B<master> branch,
+which corresponds to the code is generated by Dist::Zilla and
+what is uploaded to CPAN. It won't contain any of the changes brought to the codebase since the last
+CPAN release, but for a small patch that shouldn't be a problem.
+
 
 =head1 CODING GUIDELINES
 
@@ -334,8 +417,5 @@ reports. This is done to make sure the new merge doesn't bring regressions.
 =head2 Roadmap
 
 For current information on Dancer's plans for the future, see the file TODO at
-L<https://github.com/sukria/Dancer/blob/master/TODO>.
+L<https://github.com/PerlDancer/Dancer/blob/master/TODO>.
 
-=head1 AUTHOR
-
-This document has been written by Alexis Sukrieh L<sukria@cpan.org>

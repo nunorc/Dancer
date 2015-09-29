@@ -3,7 +3,7 @@ use warnings;
 
 use Test::More;
 
-plan tests => 28;
+plan tests => 35;
 
 use Dancer qw/ :syntax :tests /;
 use Dancer::Test;
@@ -41,6 +41,14 @@ del '/user/:id' => sub {
 
 get '/query' => sub {
     return join(":",params('query'));
+};
+
+post '/upload' => sub {
+	return upload('payload')->content;
+};
+
+any '/headers' => sub {
+    return request->headers;
 };
 
 my $resp = dancer_response GET => '/marco';
@@ -87,4 +95,25 @@ is_deeply $r->{content}, { user => { id => 2, name => "Franck Cuny" } },
   "id is correctly increased";
 
 $r = dancer_response( GET => '/query', { params => {foo => 'bar'}});
-is $r->{content} => "foo:bar";
+is $r->{content}, "foo:bar", 'passed fake query params';
+
+$r = dancer_response( GET => '/query?foo=bar' );
+is $r->{content}, "foo:bar", 'passed params in query';
+
+my $data = "She sells sea shells by the sea shore";
+$r = dancer_response(
+	POST => '/upload', 
+	{ files => [{name => 'payload', filename =>'test.txt', data => $data }] }
+);
+is $r->{content}, $data, "file data uploaded";
+
+$r = dancer_response(GET => '/headers');
+isa_ok $r->content, 'HTTP::Headers', 'The request headers';
+
+$r = dancer_response(POST => '/headers', { headers => [ 'Content_Type' => "text/plain" ] });
+isa_ok $r->content, 'HTTP::Headers', 'The request headers';
+is $r->content->header('Content-Type'), "text/plain", "Content-Type preserved";
+
+$r = dancer_response(POST => '/headers', { headers => HTTP::Headers->new('Content-Type' => "text/plain" ) });
+isa_ok $r->{content}, 'HTTP::Headers', 'The request headers';
+is $r->content->header('Content-Type'), "text/plain", "Content-Type preserved";

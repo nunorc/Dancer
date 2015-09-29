@@ -1,4 +1,6 @@
 package Dancer::Template::Simple;
+#ABSTRACT: pure Perl 5 template engine for Dancer
+
 use strict;
 use warnings;
 use Carp;
@@ -6,6 +8,7 @@ use Carp;
 use base 'Dancer::Template::Abstract';
 Dancer::Template::Simple->attributes('start_tag', 'stop_tag');
 use Dancer::FileUtils 'read_file_content';
+use Dancer::Exception qw(:all);
 
 sub init {
     my $self     = shift;
@@ -106,10 +109,10 @@ sub _read_content_from_template {
         $content = $$template;
     }
     else {
-        croak "'$template' is not a regular file"
+        raise core_template => "'$template' is not a regular file"
           unless -f $template;
         $content = read_file_content($template);
-        croak "unable to read content for file $template"
+        raise core_template => "unable to read content for file $template"
           if not defined $content;
     }
     return $content;
@@ -157,13 +160,9 @@ __END__
 
 =pod
 
-=head1 NAME
-
-Dancer::Template::Simple - pure Perl 5 template engine for Dancer
-
 =head1 DESCRIPTION
 
-This template engine is provided as a default one for the Dancer micro
+This template engine is provided as a default one for the L<< Dancer >> micro
 framework.
 
 This template engine should be fine for development purposes but is not a
@@ -171,7 +170,7 @@ powerful one, it's written in pure Perl and has no C bindings to accelerate the
 template processing.
 
 If you want to power an application with Dancer in production environment, it's
-strongly advised to switch to Dancer::Template::TemplateToolkit.
+strongly advised to switch to L<< Dancer::Template::TemplateToolkit >>.
 
 =head1 SYNTAX
 

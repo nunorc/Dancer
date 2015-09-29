@@ -1,8 +1,10 @@
 package Dancer::Session;
+#ABSTRACT: session engine for the Dancer framework
 
 use strict;
 use warnings;
 
+use Carp;
 use Dancer::Cookies;
 use Dancer::Engine;
 
@@ -20,6 +22,8 @@ sub init {
 
 # retrieve or create a session for the client
 sub get_current_session {
+    shift;
+    my %p       = @_;
     my $sid     = engine->read_session_id;
     my $session = undef;
     my $class   = ref(engine);
@@ -28,28 +32,36 @@ sub get_current_session {
 
     if (not defined $session) {
         $session = $class->create();
-        engine->write_session_id($session->id);
     }
+
+    # Generate a session cookie; we want to do this regardless of whether the
+    # session is new or existing, so that the cookie expiry is updated.
+    engine->write_session_id($session->id)
+        unless $p{no_update};
+
     return $session;
 }
 
-sub get { get_current_session() }
+sub get { get_current_session(@_) }
 
 sub read {
     my ($class, $key) = @_;
     return unless $key;
     my $session = get_current_session();
-    return $session->{$key};
+    return $session->get_value($key);
 }
 
 sub write {
     my ($class, $key, $value) = @_;
+
     return unless $key;
+    $key eq 'id' and croak 'Can\'t store to session key with name "id"';
+
     my $session = get_current_session();
-    $session->{$key} = $value;
+    $session->set_value($key, $value);
 
     # TODO : should be moved as an "after" filter
-    $session->flush;
+    $session->flush unless $session->is_lazy;
     return $value;
 }
 
@@ -57,10 +69,6 @@ sub write {
 __END__
 
 =pod
-
-=head1 NAME
-
-Dancer::Session - session engine for the Dancer framework
 
 =head1 DESCRIPTION
 
@@ -104,8 +112,8 @@ Retrieving that value later:
     my $foo = session 'foo';
 
 You can either look for an existing item in the session storage or modify one.
-Here is a simple example of two route handlers that implement basic C</login> 
-and C</home> actions using the session engine. 
+Here is a simple example of two route handlers that implement basic C</login>
+and C</home> actions using the session engine.
 
     post '/login' => sub {
         # look for params and authenticate the user
@@ -120,7 +128,7 @@ and C</home> actions using the session engine.
         # /login
         if (not session('user_id')) {
             redirect '/login';
-        a
+        }
     };
 
 Of course, you probably don't want to have to duplicate the code to check
@@ -147,8 +155,8 @@ but maybe not the best for production needs.
 
 =item L<Dancer::Session::Simple>
 
-A very simple session backend, holding all session data in memory.  This means 
-that sessions are volatile, and no longer exist when the process exits.  This 
+A very simple session backend, holding all session data in memory.  This means
+that sessions are volatile, and no longer exist when the process exits.  This
 module is likely to be most useful for testing purposes, and of little use for
 production.
 
@@ -171,8 +179,8 @@ inside encrypted cookies (this engine doesn't use a server-side storage).
 
 =item L<Dancer::Session::Storable>
 
-This backend stores sessions on disc using Storable, which offers solid 
-performance and reliable serialisation of various data structures.
+This backend stores sessions on disc using Storable, which offers solid
+performance and reliable serialization of various data structures.
 
 =item L<Dancer::Session::MongoDB>
 

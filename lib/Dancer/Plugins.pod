@@ -1,6 +1,5 @@
-=head1 NAME
-
-Dancer::Plugins - interesting plugins to add to Dancer's capabilities
+# PODNAME: Dancer::Plugins
+# ABSTRACT: interesting plugins to add to Dancer's capabilities
 
 =head1 DESCRIPTION
 
@@ -24,7 +23,7 @@ should be.
 
 =item L<Dancer::Plugin::DBIC>
 
-Provides easy acces to DBIx::Class database virtualization.
+Provides easy access to DBIx::Class database virtualization.
 
 =item L<Dancer::Plugin::Auth::RBAC>
 
@@ -51,12 +50,8 @@ Makes writing RESTful web services easy.
 
 =item L<Dancer::Plugin::SiteMap>
 
-Automatically provides site maps (as a HTML page, or as an XML sitemap ready for
+Automatically provides site maps (as an HTML page, or as an XML sitemap ready for
 Google) based on the routes your app defines.
-
-=item L<Dancer::Plugin::Validation>
-
-Easy data validation powered by L<Oogly>.
 
 =item L<Dancer::Plugin::Params::Normalization>
 

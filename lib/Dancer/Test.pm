@@ -1,4 +1,5 @@
 package Dancer::Test;
+#ABSTRACT: Test helpers to test a Dancer application
 
 # test helpers for Dancer apps
 
@@ -9,10 +10,13 @@ use Test::More import => [ '!pass' ];
 
 use Carp;
 use HTTP::Headers;
+use Scalar::Util 'blessed';
+
 use Dancer ':syntax', ':tests';
 use Dancer::App;
 use Dancer::Deprecation;
 use Dancer::Request;
+use Dancer::Request::Upload;
 use Dancer::SharedData;
 use Dancer::Renderer;
 use Dancer::Handler;
@@ -37,12 +41,13 @@ use vars '@EXPORT';
   response_content_is_deeply
   response_content_like
   response_content_unlike
+
   response_is_file
   response_headers_are_deeply
   response_headers_include
+  response_redirect_location_is
 
   dancer_response
-  get_response
 
   read_logs
 );
@@ -73,11 +78,16 @@ sub import {
 
 # Route Registry
 
+sub _isa {
+    my ( $reference, $classname ) = @_;
+    return blessed $reference && $reference->isa($classname);
+}
+
 sub _req_to_response {
     my $req = shift;
 
     # already a response object
-    return $req if ref $req eq 'Dancer::Response';
+    return $req if _isa($req, 'Dancer::Response');
 
     return dancer_response( ref $req eq 'ARRAY' ? @$req : ( 'GET', $req ) );
 }
@@ -85,10 +95,9 @@ sub _req_to_response {
 sub _req_label {
     my $req = shift;
 
-    return ref $req eq 'Dancer::Response' ? 'response object'
-         : ref $req eq 'ARRAY' ? join( ' ', @$req )
-         : "GET $req"
-         ;
+    return _isa($req, 'Dancer::Response') ? 'response object'
+         : ref $req eq 'ARRAY'            ? join( ' ', @$req )
+         :                                  "GET $req";
 }
 
 sub expand_req {
@@ -215,8 +224,8 @@ sub response_headers_are_deeply {
     $test_name ||= "headers are as expected for " . _req_label($req);
 
     local $Test::Builder::Level = $Test::Builder::Level + 1;
-    my $response = dancer_response(expand_req($req));
-    
+    my $response = _req_to_response($req);
+
     is_deeply(
         _sort_headers( $response->headers_to_array ),
         _sort_headers( $expected ),
@@ -245,11 +254,20 @@ sub _sort_headers {
 
 sub response_headers_include {
     my ($req, $expected, $test_name) = @_;
-    $test_name ||= "headers include expected data for @$req";
+    $test_name ||= "headers include expected data for " . _req_label($req);
     my $tb = Test::Builder->new;
 
-    my $response = dancer_response(expand_req($req));
+    my $response = _req_to_response($req);
     return $tb->ok(_include_in_headers($response->headers_to_array, $expected), $test_name);
+}
+
+sub response_redirect_location_is {
+    my ($req, $expected, $test_name) = @_;
+    $test_name ||= "redirect location looks good for " . _req_label($req);
+    my $tb = Test::Builder->new;
+
+    my $response = _req_to_response($req);
+    return  $tb->is_eq($response->header('location'), $expected, $test_name);
 }
 
 
@@ -257,12 +275,12 @@ sub response_headers_include {
 sub _include_in_headers {
     my ($full_headers, $expected_subset) = @_;
 
-    # walk through all the expected header pairs, make sure 
+    # walk through all the expected header pairs, make sure
     # they exist with the same value in the full_headers list
     # return false as soon as one is not.
     for (my $i=0; $i<scalar(@$expected_subset); $i+=2) {
         my ($name, $value) = ($expected_subset->[$i], $expected_subset->[$i + 1]);
-        return 0 
+        return 0
           unless _check_header($full_headers, $name, $value);
     }
 
@@ -282,12 +300,17 @@ sub _check_header {
 sub dancer_response {
     my ($method, $path, $args) = @_;
     $args ||= {};
+    my $extra_env = {};
 
     if ($method =~ /^(?:PUT|POST)$/) {
 
         my ($content, $content_type);
 
-        if ( $args->{body} ) {
+        if ( $args->{body} and $args->{files} ) {
+            # XXX: When fixing this, update this method's POD
+            croak 'dancer_response() does not support both body and files';
+        }
+        elsif ( $args->{body} ) {
             $content      = $args->{body};
             $content_type = $args->{content_type}
                 || 'application/x-www-form-urlencoded';
@@ -306,43 +329,66 @@ sub dancer_response {
         elsif ( $args->{files} ) {
             $content_type = 'multipart/form-data; boundary=----BOUNDARY';
             foreach my $file (@{$args->{files}}){
-                $content .= qq{------BOUNDARY
-Content-Disposition: form-data; name="$file->{name}"; filename="$file->{filename}"
-Content-Type: text/plain
-
-};
-                open my $fh, '<', $file->{filename};
-                while (<$fh>){
-                    $content .= $_;
+                $file->{content_type} ||= 'text/plain';
+                $content .= qq/------BOUNDARY\r\n/;
+                $content .= qq/Content-Disposition: form-data; name="$file->{name}"; filename="$file->{filename}"\r\n/;
+                $content .= qq/Content-Type: $file->{content_type}\r\n\r\n/;
+                if ( $file->{data} ) {
+                    $content .= $file->{data};
+                } else {
+                    open my $fh, '<', $file->{filename};
+                    if ( -B $file->{filename} ) {
+                        binmode $fh;
+                    }
+                    while (<$fh>) {
+                        $content .= $_;
+                    }
                 }
-                $content .= "\n";
+                $content .= "\r\n";
             }
             $content .= "------BOUNDARY";
-            $content =~ s/\r\n/\n/g;
-            $content =~ s/\n/\r\n/g;
         }
 
         my $l = 0;
         $l = length $content if defined $content;
         open my $in, '<', \$content;
-        $ENV{'CONTENT_LENGTH'} = $l;
-        $ENV{'CONTENT_TYPE'}   = $content_type || "";
-        $ENV{'psgi.input'}     = $in;
+        $extra_env->{'CONTENT_LENGTH'} = $l;
+        $extra_env->{'CONTENT_TYPE'}   = $content_type || "";
+        $extra_env->{'psgi.input'}     = $in;
     }
 
     my ($params, $body, $headers) = @$args{qw(params body headers)};
 
-    if ($headers and (my @headers = @$headers)) {
-        while (my $h = shift @headers) {
-            if ($h =~ /content-type/i) {
-                $ENV{'CONTENT_TYPE'} = shift @headers;
-            }
+    $headers = HTTP::Headers->new(@{$headers||[]})
+        unless _isa($headers, "HTTP::Headers");
+
+    if ($headers->header('Content-Type')) {
+        $extra_env->{'CONTENT_TYPE'} = $headers->header('Content-Type');
+    }
+
+    # handle all the keys of Request::_build_request_env():
+    for my $key (qw( user_agent host accept_language accept_charset
+        accept_encoding keep_alive connection accept accept_type referer
+        x_requested_with )) {
+        my $k = sprintf("HTTP_%s", uc $key);
+        $extra_env->{$k} = $headers->{$key}
+            if exists $headers->{$key};
+    }
+
+    # fake the REQUEST_URI
+    # TODO deal with the params
+    unless( $extra_env->{REQUEST_URI} ) {
+        $extra_env->{REQUEST_URI} = $path;
+        if ( $method eq 'GET' and $params ) {
+            $extra_env->{REQUEST_URI} .=
+                '?' . join '&', map { join '=', $_, $params->{$_} } 
+                                    sort keys %$params;
         }
     }
 
     my $request = Dancer::Request->new_for_request(
         $method => $path,
-        $params, $body, HTTP::Headers->new(@$headers)
+        $params, $body, $headers, $extra_env
     );
 
     # first, reset the current state
@@ -398,11 +444,7 @@ __END__
 
 =pod
 
-=head1 NAME
-
-Dancer::Test - Test helpers to test a Dancer application
-
-=head1 SYNOPSYS
+=head1 SYNOPSIS
 
     use strict;
     use warnings;
@@ -448,7 +490,7 @@ registry.
 
 =head2 route_doesnt_exist([$method, $path], $test_name)
 
-Asserts that the given request does not match any route handler 
+Asserts that the given request does not match any route handler
 in Dancer's registry.
 
     route_doesnt_exist [GET => '/bogus_path'], "GET /bogus_path is not handled";
@@ -456,7 +498,9 @@ in Dancer's registry.
 
 =head2 response_exists([$method, $path], $test_name)
 
-Asserts that a response is found for the given request (note that even though 
+Deprecated - Use response_status_isnt and check for status 404.
+
+Asserts that a response is found for the given request (note that even though
 a route for that path might not exist, a response can be found during request
 processing, because of filters).
 
@@ -464,6 +508,8 @@ processing, because of filters).
         "response found for unknown path";
 
 =head2 response_doesnt_exist([$method, $path], $test_name)
+
+Deprecated - Use response_status_is and check for status 404.
 
 Asserts that no response is found when processing the given request.
 
@@ -488,27 +534,27 @@ one given.
 
 Asserts that the response content is equal to the C<$expected> string.
 
-    response_content_is [GET => '/'], "Hello, World", 
+    response_content_is [GET => '/'], "Hello, World",
         "got expected response content for GET /";
 
 =head2 response_content_isnt([$method, $path], $not_expected, $test_name)
 
 Asserts that the response content is not equal to the C<$not_expected> string.
 
-    response_content_isnt [GET => '/'], "Hello, World", 
+    response_content_isnt [GET => '/'], "Hello, World",
         "got expected response content for GET /";
 
 =head2 response_content_is_deeply([$method, $path], $expected_struct, $test_name)
 
-Similar to response_content_is(), except that if response content and 
-$expected_struct are references, it does a deep comparison walking each data 
-structure to see if they are equivalent.  
+Similar to response_content_is(), except that if response content and
+$expected_struct are references, it does a deep comparison walking each data
+structure to see if they are equivalent.
 
 If the two structures are different, it will display the place where they start
 differing.
 
-    response_content_is_deeply [GET => '/complex_struct'], 
-        { foo => 42, bar => 24}, 
+    response_content_is_deeply [GET => '/complex_struct'],
+        { foo => 42, bar => 24},
         "got expected response structure for GET /complex_struct";
 
 =head2 response_content_like([$method, $path], $regexp, $test_name)
@@ -516,7 +562,7 @@ differing.
 Asserts that the response content for the given request matches the regexp
 given.
 
-    response_content_like [GET => '/'], qr/Hello, World/, 
+    response_content_like [GET => '/'], qr/Hello, World/,
         "response content looks good for GET /";
 
 =head2 response_content_unlike([$method, $path], $regexp, $test_name)
@@ -524,7 +570,7 @@ given.
 Asserts that the response content for the given request does not match the regexp
 given.
 
-    response_content_unlike [GET => '/'], qr/Page not found/, 
+    response_content_unlike [GET => '/'], qr/Page not found/,
         "response content looks good for GET /";
 
 =head2 response_headers_are_deeply([$method, $path], $expected, $test_name)
@@ -539,16 +585,33 @@ Asserts that the response headers data structure includes some of the defined on
 
     response_headers_include [GET => '/'], [ 'Content-Type' => 'text/plain' ];
 
+=head2 response_redirect_location_is([$method, $path], $expected, $test_name)
+
+Asserts that the location header send with a 302 redirect equals to the C<$expected>
+location.
+
+    response_redirect_location_is [GET => '/'], 'http://localhost/index.html';
+
 =head2 dancer_response($method, $path, { params => $params, body => $body, headers => $headers, files => [{filename => '/path/to/file', name => 'my_file'}] })
 
-Returns a Dancer::Response object for the given request.
+Returns a L<< Dancer::Response >> object for the given request.
 
 Only $method and $path are required.
 
-$params is a hashref, $body is a string and $headers can be an arrayref or
-a HTTP::Headers object, $files is an arrayref of hashref, containing some files to upload.
+$params is a hashref, $body can be a string or a hashref and $headers can be an arrayref or
+a L<< HTTP::Headers >> object, $files is an arrayref of hashref, containing some files to upload.
 
-A good reason to use this function is for testing POST requests. Since POST requests may not be idempotent, it is necessary to capture the content and status in one shot. Calling the response_status_is and response_content_is functions in succession would make two requests, each of which could alter the state of the application and cause Schrodinger's cat to die.
+$params always populates the query string, even for POST requests.  $body
+always populates the request body.
+
+Currently, Dancer::Test cannot cope with both I<< body >> and I<< files >>
+passed in the same call.
+
+A good reason to use this function is for testing POST requests. Since POST
+requests may not be idempotent, it is necessary to capture the content and
+status in one shot. Calling the response_status_is and response_content_is
+functions in succession would make two requests, each of which could alter the
+state of the application and cause Schrodinger's cat to die.
 
     my $response = dancer_response POST => '/widgets';
     is $response->{status}, 202, "response for POST /widgets is 202";
@@ -564,7 +627,14 @@ It's possible to test file uploads:
 
     post '/upload' => sub { return upload('image')->content };
 
-    $response = dancer_reponse(POST => '/upload', {files => [{name => 'image', filename => '/path/to/image.jpg}]});
+    $response = dancer_response(POST => '/upload', {files => [{name => 'image', filename => '/path/to/image.jpg'}]});
+
+In addition, you can supply the file contents as the C<data> key:
+
+    my $data  = 'A test string that will pretend to be file contents.';
+    $response = dancer_response(POST => '/upload', {
+        files => [{name => 'test', filename => "filename.ext", data => $data}]
+    });
 
 =head2 read_logs
 

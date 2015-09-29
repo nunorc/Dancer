@@ -1,4 +1,5 @@
 package Dancer::App;
+# ABSTRACT: Base application class for Dancer.
 
 use strict;
 use warnings;
@@ -9,6 +10,8 @@ use Dancer::Config;
 use Dancer::ModuleLoader;
 use Dancer::Route::Registry;
 use Dancer::Logger;
+use Dancer::Exception qw(:all);
+use Dancer::Deprecation;
 
 Dancer::App->attributes(qw(name app_prefix prefix registry settings on_lexical_prefix));
 
@@ -34,12 +37,26 @@ sub set_app_prefix {
     $self->prefix($prefix);
 }
 
+sub get_prefix {
+    # return the current prefix (if undefined, return an empty string)
+    return Dancer::App->current->prefix || '';
+}
+
+sub incr_lexical_prefix {
+    no warnings;  # for undefined
+    $_[0]->on_lexical_prefix( $_[0]->on_lexical_prefix + 1 );
+}
+
+sub dec_lexical_prefix {
+    $_[0]->on_lexical_prefix( $_[0]->on_lexical_prefix - 1 );
+}
+
 sub set_prefix {
     my ($self, $prefix, $cb) = @_;
 
     undef $prefix if defined($prefix) and $prefix eq "/";
 
-    croak "not a valid prefix: `$prefix', must start with a /"
+    raise core_app => "not a valid prefix: `$prefix', must start with a /"
       if defined($prefix) && $prefix !~ /^\//;
 
     my $app_prefix = defined $self->app_prefix ? $self->app_prefix : "";
@@ -54,10 +71,10 @@ sub set_prefix {
     }
 
     if (ref($cb) eq 'CODE') {
-        Dancer::App->current->on_lexical_prefix(1);
+        Dancer::App->current->incr_lexical_prefix;
         eval { $cb->() };
         my $e = $@;
-        Dancer::App->current->on_lexical_prefix(0);
+        Dancer::App->current->dec_lexical_prefix;
         Dancer::App->current->prefix($previous);
         die $e if $e;
     }
@@ -71,6 +88,11 @@ sub routes {
 
 sub reload_apps {
     my ($class) = @_;
+
+    Dancer::Deprecation->deprecated(
+        feature => 'auto_reload',
+        reason => 'use plackup -r instead',
+    );
 
     my @missing_modules = grep { not Dancer::ModuleLoader->load($_) }
         qw(Module::Refresh Clone);
@@ -122,7 +144,7 @@ sub find_route {
     # if route cache is enabled, we check if we handled this path before
     if (Dancer::Config::setting('route_cache')) {
         my $route = Dancer::Route::Cache->get->route_from_path($method,
-            $request->path_info);
+            $request->path_info, $self->name);
 
         # NOTE maybe we should cache the match data as well
         if ($route) {
@@ -142,7 +164,7 @@ sub find_route {
             # if we have a route cache, store the result
             if (Dancer::Config::setting('route_cache')) {
                 Dancer::Route::Cache->get->store_path($method,
-                    $request->path_info => $r);
+                    $request->path_info => $r, $self->name);
             }
 
             return $r;
@@ -155,7 +177,7 @@ sub init {
     my ($self) = @_;
     $self->name('main') unless defined $self->name;
 
-    croak "an app named '" . $self->name . "' already exists"
+    raise core_app => "an app named '" . $self->name . "' already exists"
       if exists $_apps->{$self->name};
 
     # default values for properties

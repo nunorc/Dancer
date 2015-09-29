@@ -8,7 +8,7 @@ my @tests = (
     { name => 'msg', value => 'hello; world', opts => { http_only => 0 } },
 );
 
-plan tests => scalar (@tests * 5) + 11;
+plan tests => scalar (@tests * 5) + 12;
 
 is_deeply(cookies, {}, "cookies() return a hashref");
 
@@ -23,13 +23,24 @@ foreach my $test (@tests) {
        "HttpOnly is correctly set";
 }
 
-ok my $c = Dancer::Cookie->new(
-    name  => 'complex',
-    value => { token => 'foo', token_secret => 'bar' },
-);
+{
+    my $values = { token => 'foo', token_secret => 'bar' };
 
-my $text = $c->to_header;
-like $text, qr/complex=token&foo&token_secret&bar/;
+    ok my $c = Dancer::Cookie->new(
+        name  => 'complex',
+        value => $values,
+    );
+
+    subtest "cookie header" => sub {
+        plan tests => 2;
+
+        ok $c->to_header =~ /^complex=([^;]+);/, "cookie name";
+
+        my %cookie_values = split '&', $1;
+
+        is_deeply \%cookie_values => $values, "cookie values";
+    };
+}
 
 my $env = {
     REQUEST_METHOD => 'GET',
@@ -63,3 +74,20 @@ Dancer::Cookies->init;
 
 $cookies = Dancer::Cookies->cookies;
 like $cookies->{fbs_102}->value, qr/access_token\=/;
+
+# Test for undef cookie values from technically invalid cookies issue #782
+eval {
+    use warnings FATAL => qw( all );
+
+    $env = {
+        REQUEST_METHOD => 'GET',
+        SCRIPT_NAME => '/',
+        HTTP_COOKIE => 'invalid_cookie=1,2,3',
+    };
+
+    $request = Dancer::Request->new(env => $env);
+    Dancer::SharedData->request($request);
+    Dancer::Cookies->init;
+};
+unlike($@, qr/Use of uninitialized value in string/, 'undef or invalid cookies are quietly ignored');
+

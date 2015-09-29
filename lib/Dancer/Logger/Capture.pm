@@ -1,12 +1,9 @@
 package Dancer::Logger::Capture;
+# ABSTRACT: Capture dancer logs
 
 use strict;
 use warnings;
 
-
-=head1 NAME
-
-Dancer::Logger::Capture - Capture dancer logs
 
 =head1 SYNOPSIS
 
@@ -19,7 +16,7 @@ Dancer::Logger::Capture - Capture dancer logs
 
 This is a logger class for L<Dancer> which captures all logs to an object.
 
-It's primary purpose is for testing.
+Its primary purpose is for testing.
 
 =head2 Methods
 

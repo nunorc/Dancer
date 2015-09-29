@@ -1,4 +1,6 @@
 package Dancer::Cookie;
+#ABSTRACT: class representing cookies
+
 use strict;
 use warnings;
 
@@ -29,7 +31,10 @@ sub to_header {
     my $value       = join('&', map {uri_escape($_)} $self->value);
     my $no_httponly = defined( $self->http_only ) && $self->http_only == 0;
 
-    my @headers = $self->name . '=' . $value;
+    my $name = $self->name;
+    $name =~ s/[=,; \t\r\n\013\014]//mg;
+
+    my @headers = $name . '=' . $value;
     push @headers, "path=" . $self->path        if $self->path;
     push @headers, "expires=" . $self->expires  if $self->expires;
     push @headers, "domain=" . $self->domain    if $self->domain;
@@ -118,10 +123,6 @@ __END__
 
 =pod
 
-=head1 NAME
-
-Dancer::Cookie - class representing cookies
-
 =head1 SYNOPSIS
 
     use Dancer::Cookie;
@@ -132,7 +133,7 @@ Dancer::Cookie - class representing cookies
 
 =head1 DESCRIPTION
 
-Dancer::Cookie provides a HTTP cookie object to work with cookies.
+Dancer::Cookie provides an HTTP cookie object to work with cookies.
 
 =head1 ATTRIBUTES
 
@@ -150,7 +151,7 @@ The cookie's expiration date.  There are several formats.
 
 Unix epoch time like 1288817656 to mean "Wed, 03-Nov-2010 20:54:16 GMT"
 
-A human readable offset from the current time such as "2 hours".  It currently
+A human-readable offset from the current time such as "2 hours".  It currently
 understands...
 
     s second seconds sec secs
@@ -176,11 +177,11 @@ The cookie's path.
 =head2 secure
 
 If true, it instructs the client to only serve the cookie over secure
-connections such as https.
+connections such as HTTPS.
 
 =head2 http_only
 
-By default, cookies are created with a property, named C<HttpOnly>,
+By default cookies are created with a property named C<HttpOnly>,
 that can be used for security, forcing the cookie to be used only by
 the server (via HTTP) and not by any JavaScript code.
 
@@ -202,18 +203,4 @@ Runs an expiration test and sets a default path if not set.
 =head2 to_header
 
 Creates a proper HTTP cookie header from the content.
-
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2010 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
 

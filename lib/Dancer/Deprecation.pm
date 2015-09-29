@@ -1,8 +1,10 @@
 package Dancer::Deprecation;
+#ABSTRACT: handle deprecation messages
 
 use strict;
 use warnings;
-use Carp qw/croak carp/;
+use Carp;
+use Dancer::Exception qw(:all);
 
 sub deprecated {
     my ($class, %args) = @_;
@@ -25,15 +27,11 @@ sub deprecated {
     $msg .= " since version $deprecated_at" if defined $deprecated_at;
     $msg .= ". " . $args{reason} if defined $args{reason};
 
-    croak($msg) if $args{fatal};
+    raise core_deprecation => $msg if $args{fatal};
     carp($msg);
 }
 
 1;
-
-=head1 NAME
-
-Dancer::Deprecation - handle deprecation messages
 
 =head1 SYNOPSIS
 
@@ -59,13 +57,13 @@ List of possible parameters:
 
 =item B<message> message to display
 
-=item B<fatal> if set to true, croak instead of carp
+=item B<fatal> if set to true, raises a Dancer::Exception (Core::Deprecation) instead of carp
 
 =item B<reason> why is the feature deprecated
 
 =back
 
-You can call the method with no arguments, and a default message using informations from C<caller> will be build for you.
+You can call the method with no arguments, and a default message using information from C<caller> will be built for you.
 
 =head1 LICENSE
 

@@ -1,6 +1,5 @@
-=head1 NAME
-
-Dancer::Introduction - A gentle introduction to Dancer
+package Dancer::Introduction
+# ABSTRACT: A gentle introduction to Dancer
 
 =head1 DESCRIPTION
 
@@ -70,22 +69,30 @@ route handlers.
 
 =over 8
 
-=item B<GET>        The GET method retrieves information (when defining a route
-                    handler for the GET method, Dancer automatically defines a
-                    route handler for the HEAD method, in order to honour HEAD
-                    requests for each of your GET route handlers).
-                    To define a GET action, use the B<get> keyword.
+=item B<GET>
 
-=item B<POST>       The POST method is used to create a resource on the
-                    server.
-                    To define a POST action, use the B<post> keyword.
+The GET method retrieves information (when defining a route
+handler for the GET method, Dancer automatically defines a
+route handler for the HEAD method, in order to honour HEAD
+requests for each of your GET route handlers).
+To define a GET action, use the B<get> keyword.
 
-=item B<PUT>        The PUT method is used to update an existing resource.
-                    To define a PUT action, use the B<put> keyword.
+=item B<POST>
 
-=item B<DELETE>     The DELETE method requests that the origin server delete
-                    the resource identified by the Request-URI.
-                    To define a DELETE action, use the B<del> keyword.
+The POST method is used to create a resource on the
+server.
+To define a POST action, use the B<post> keyword.
+
+=item B<PUT>
+
+The PUT method is used to update an existing resource.
+To define a PUT action, use the B<put> keyword.
+
+=item B<DELETE>
+
+The DELETE method requests that the origin server delete
+the resource identified by the Request-URI.
+To define a DELETE action, use the B<del> keyword.
 
 =back
 
@@ -127,7 +134,7 @@ be set in the params hashref.
 Tokens can be optional, for example:
 
     get '/hello/:name?' => sub {
-        "Hello there " . param('name') || "whoever you are!";
+        "Hello there " . (param('name') || "whoever you are!");
     };
 
 
@@ -179,7 +186,7 @@ From here, any route handler is defined to /home/*
 You can unset the prefix value
 
     prefix '/'; # or: prefix undef;
-    get '/page1' => sub {}; will match /page1
+    get '/page1' => sub {}; # will match '/page1'
 
 Alternatively, to prevent you from ever forgetting to undef the prefix,
 you can use lexical prefix like this:
@@ -188,7 +195,7 @@ you can use lexical prefix like this:
       get '/page1' => sub {}; # will match '/home/page1'
     }; ## prefix reset to previous value on exit
     
-    get '/page1' => sub {}; will match /page1
+    get '/page1' => sub {}; # will match '/page1'
 
 =head1 ACTION SKIPPING
 
@@ -230,15 +237,15 @@ B<show_errors> setting.
 Note that you can also choose to consider all warnings in your route handlers
 as errors when the setting B<warnings> is set to 1.
 
-=head1 FILTERS
+=head1 HOOKS
 
-=head2 Before filters
+=head2 Before hooks
 
-Before filters are evaluated before each request within the context of the
+Before hooks are evaluated before each request within the context of the
 request and can modify the request and response. It's possible to define
 variables which will be accessible in the action blocks with the keyword 'var'.
 
-    before sub {
+    hook 'before' => sub {
         var note => 'Hi there';
         request->path_info('/foo/oversee')
     };
@@ -252,7 +259,7 @@ variables which will be accessible in the action blocks with the keyword 'var'.
 For another example, this can be used along with session support to easily
 give non-logged-in users a login page:
 
-    before sub {
+    hook 'before' => sub {
         if (!session('user') && request->path_info !~ m{^/login}) {
             # Pass the original path requested along to the handler:
             var requested_path => request->path_info;
@@ -265,32 +272,32 @@ The request keyword returns the current Dancer::Request object representing the
 incoming request. See the documentation of the L<Dancer::Request> module for
 details.
 
-=head2 After filters 
+=head2 After hooks 
 
-C<after> filters are evaluated after the response has been built by a route
+C<after> hooks are evaluated after the response has been built by a route
 handler, and can alter the response itself, just before it's sent to the
 client.
 
-The filter is given the response object as its first argument:
+The hook is given the response object as its first argument:
 
-    after sub {
+    hook 'after' => sub {
         my $response = shift;
-        $response->{content} = 'after filter got here!';
+        $response->{content} = 'after hook got here!';
     };
 
 
-=head2 Before template filters
+=head2 Before template hook
 
-C<before_template> hooks are called whenever a template is going to be
+C<before_template_render> hooks are called whenever a template is going to be
 processed, they are passed the tokens hash which they can alter.
 
-    before_template sub {
+    hook 'before_template_render' => sub {
         my $tokens = shift;
         $tokens->{foo} = 'bar';
-    }
+    };
 
 The tokens hash will then be passed to the template with all the modifications
-performed by the filter. This is a good way to setup some global vars you like
+performed by the hook. This is a good way to setup some global vars you like
 to have in all your templates, like the name of the user logged in or a
 section name.
 
@@ -320,7 +327,7 @@ That way, the appropriate  environment config file will be loaded according to
 the running environment (if none is specified, it will be 'development').
 
 Note that you can change the running environment using the --environment
-commandline switch.
+command line switch.
 
 Typically, you'll want to set the following values in a development config
 file:
@@ -398,18 +405,19 @@ start the logger engine in your config.yml
 
 Then you can choose which kind of messages you want to actually log:
 
-    log: 'debug'     # will log debug, warning and errors
-    log: 'warning'   # will log warning and errors
-    log: 'error'     # will log only errors
+    log: 'debug'     # will log debug, warning, error and info messages
+    log: 'info'      # will log info, warning and error messages
+    log: 'warning'   # will log warning and error messages
+    log: 'error'     # will log error messages
 
 A directory appdir/logs will be created and will host one logfile per
 environment. The log message contains the time it was written, the PID of the
 current process, the message and the caller information (file and line).
 
-To log messages, use the debug, warning and error methods, for instance:
+To log messages, use the debug, info, warning and error functions. For
+instance:
 
     debug "This is a debug message";
-
 
 =head1 USING TEMPLATES
 
@@ -547,8 +555,7 @@ A setting is key/value pair assigned by the keyword B<set>:
 
 More usefully, settings can be defined in a YAML configuration file.
 Environment-specific settings can also be defined in environment-specific files
-(for instance, you don't want auto_reload in production, and might want extra
-logging in development).  See the cookbook for examples.
+(for instance, you might want extra logging in development).  See the cookbook for examples.
 
 See L<Dancer::Config> for complete details about supported settings.
 
@@ -558,8 +565,8 @@ When writing a webservice, data serialization/deserialization is a common issue
 to deal with. Dancer can automatically handle that for you, via a serializer.
 
 When setting up a serializer, a new behaviour is authorized for any route
-handler you define: any non-scalar response will be rendered as a serialized
-string, via the current serializer.
+handler you define: any response that is a reference will be rendered as a
+serialized string, via the current serializer.
 
 Here is an example of a route handler that will return a HashRef
 
@@ -573,7 +580,7 @@ Here is an example of a route handler that will return a HashRef
         }
     };
 
-As soon as the content is not a scalar - and a serializer is set, which is not
+As soon as the content is a reference - and a serializer is set, which is not
 the case by default - Dancer renders the response via the current
 serializer.
 

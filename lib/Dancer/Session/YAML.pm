@@ -1,15 +1,16 @@
 package Dancer::Session::YAML;
+#ABSTRACT: YAML-file-based session backend for Dancer
 
 use strict;
 use warnings;
 use Carp;
 use base 'Dancer::Session::Abstract';
 
-use Fcntl ':flock';
 use Dancer::Logger;
 use Dancer::ModuleLoader;
 use Dancer::Config 'setting';
-use Dancer::FileUtils qw(path set_file_mode);
+use Dancer::FileUtils qw(path atomic_write);
+use Dancer::Exception qw(:all);
 
 # static
 
@@ -20,7 +21,7 @@ sub init {
     $self->SUPER::init(@_);
 
     if (!keys %session_dir_initialized) {
-        croak "YAML is needed and is not installed"
+        raise core_session => "YAML is needed and is not installed"
           unless Dancer::ModuleLoader->load('YAML');
     }
 
@@ -34,7 +35,7 @@ sub init {
         # make sure session_dir exists
         if (!-d $session_dir) {
             mkdir $session_dir
-              or croak "session_dir $session_dir cannot be created";
+              or raise core_session => "session_dir $session_dir cannot be created";
         }
         Dancer::Logger::core("session_dir : $session_dir");
     }
@@ -59,12 +60,17 @@ sub reset {
 # Return the session object corresponding to the given id
 sub retrieve {
     my ($class, $id) = @_;
+
+    unless( $id =~ /^[\da-z]+$/i ) {
+        warn "session id '$id' contains illegal characters\n";
+        return;
+    }
+
     my $session_file = yaml_file($id);
 
     return unless -f $session_file;
 
     open my $fh, '+<', $session_file or die "Can't open '$session_file': $!\n";
-    flock $fh, LOCK_EX or die "Can't lock file '$session_file': $!\n";
     my $content = YAML::LoadFile($fh);
     close $fh or die "Can't close '$session_file': $!\n";
 
@@ -74,7 +80,8 @@ sub retrieve {
 # instance
 
 sub yaml_file {
-    my ($id) = @_;
+    my $id = shift;
+
     return path(setting('session_dir'), "$id.yml");
 }
 
@@ -90,11 +97,7 @@ sub flush {
     my $self         = shift;
     my $session_file = yaml_file( $self->id );
 
-    open my $fh, '>', $session_file or die "Can't open '$session_file': $!\n";
-    flock $fh, LOCK_EX or die "Can't lock file '$session_file': $!\n";
-    set_file_mode($fh);
-    print {$fh} YAML::Dump($self);
-    close $fh or die "Can't close '$session_file': $!\n";
+    atomic_write( setting('session_dir'), yaml_file($self->id), YAML::Dump($self) );
 
     return $self;
 }
@@ -103,10 +106,6 @@ sub flush {
 __END__
 
 =pod
-
-=head1 NAME
-
-Dancer::Session::YAML - YAML-file-based session backend for Dancer
 
 =head1 DESCRIPTION
 
@@ -137,12 +136,12 @@ files in /tmp/dancer-sessions
 
 =head2 reset
 
-to avoid checking if the sessions directory exists everytime a new session is
+To avoid checking if the sessions directory exists every time a new session is
 created, this module maintains a cache of session directories it has already
 created. C<reset> wipes this cache out, forcing a test for existence
 of the sessions directory next time a session is created. It takes no argument.
 
-This is particulary useful if you want to remove the sessions directory on the
+This is particularly useful if you want to remove the sessions directory on the
 system where your app is running, but you want this session engine to continue
 to work without having to restart your application.
 

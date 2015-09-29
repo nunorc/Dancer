@@ -27,10 +27,10 @@ END {
     chdir $cwd;
 }
 
-my $libdir = File::Spec->catdir($cwd,'blib','lib');
+my $libdir = File::Spec->catdir($cwd,'lib');
 $libdir = '"'.$libdir.'"' if $libdir =~ / /; # this is for windows, but works in UNIX systems as well...
 
-my $dancer = File::Spec->catfile( $cwd, 'script', 'dancer' );
+my $dancer = File::Spec->catfile( $cwd, 'bin', 'dancer' );
 $dancer = '"'.$dancer.'"' if $dancer =~ / /; #same here.
 
 # the same can happen with perl itself, but while nobody complain, keep it quiet.

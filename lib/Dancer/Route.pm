@@ -1,4 +1,5 @@
 package Dancer::Route;
+# ABSTRACT: Class to represent a route in Dancer
 
 use strict;
 use warnings;
@@ -10,6 +11,8 @@ use Dancer::Logger;
 use Dancer::Config 'setting';
 use Dancer::Request;
 use Dancer::Response;
+use Dancer::Exception qw(:all);
+use Dancer::Factory::Hook;
 
 Dancer::Route->attributes(
     qw(
@@ -26,6 +29,10 @@ Dancer::Route->attributes(
       )
 );
 
+Dancer::Factory::Hook->instance->install_hooks(
+    qw/on_route_exception/
+);
+
 # supported options and aliases
 my @_supported_options = Dancer::Request->get_attributes();
 my %_options_aliases = (agent => 'user_agent');
@@ -34,9 +41,8 @@ sub init {
     my ($self) = @_;
     $self->{'_compiled_regexp'} = undef;
 
-    if (!$self->pattern) {
-        croak "cannot create Dancer::Route without a pattern";
-    }
+    raise core_route => "cannot create Dancer::Route without a pattern"
+        unless defined $self->pattern;
 
     # If the route is a Regexp, store it directly
     $self->regexp($self->pattern) 
@@ -75,10 +81,11 @@ sub match {
     my $path   = $request->path_info;
     my %params;
 
-    Dancer::Logger::core("trying to match `$path' "
-          . "against /"
-          . $self->{_compiled_regexp}
-          . "/");
+    Dancer::Logger::core(
+        sprintf "Trying to match '%s %s' against /%s/ (generated from '%s')",
+            $request->method, $path, $self->{_compiled_regexp}, $self->pattern
+    );
+
 
     my @values = $path =~ $self->{_compiled_regexp};
 
@@ -145,7 +152,7 @@ sub check_options {
     return 1 unless defined $self->options;
 
     for my $opt (keys %{$self->options}) {
-        croak "Not a valid option for route matching: `$opt'"
+        raise core_route => "Not a valid option for route matching: `$opt'"
           if not(    (grep {/^$opt$/} @{$_supported_options[0]})
                   || (grep {/^$opt$/} keys(%_options_aliases)));
     }
@@ -166,7 +173,22 @@ sub validate_options {
 sub run {
     my ($self, $request) = @_;
 
-    my $content  = $self->execute();
+    my $content = try {
+        $self->execute();
+    } continuation {
+        my ($continuation) = @_;
+        # route related continuation
+        $continuation->isa('Dancer::Continuation::Route')
+          or $continuation->rethrow();
+        # If the continuation carries some content, get it
+        my $content = $continuation->return_value();
+        defined $content or return; # to avoid returning undef;
+        return $content;
+    } catch {
+        my ($exception) = @_;
+        Dancer::Factory::Hook->execute_hooks('on_route_exception', $exception);
+        die $exception;
+    };
     my $response = Dancer::SharedData->response;
 
     if ( $response && $response->is_forwarded ) {
@@ -185,14 +207,14 @@ sub run {
 
     if ($response && $response->has_passed) {
         $response->pass(0);
-        if ($self->next) {
-            my $next_route = $self->find_next_matching_route($request);
-            return $next_route->run($request);
+
+        # find the next matching route and run it
+        while ($self = $self->next) {
+            return $self->run($request) if $self->match($request);
         }
-        else {
-            Dancer::Logger::core('Last matching route passed!');
-            return undef;
-        }
+
+        Dancer::Logger::core('Last matching route passed!');
+        return Dancer::Renderer->render_error(404);
     }
 
     # coerce undef content to empty string to
@@ -222,29 +244,17 @@ sub run {
     );
 }
 
-sub find_next_matching_route {
-    my ($self, $request) = @_;
-    my $next = $self->next;
-    return unless $next;
-
-    return $next if $next->match($request);
-    return $next->find_next_matching_route($request);
-}
-
 sub execute {
     my ($self) = @_;
 
     if (Dancer::Config::setting('warnings')) {
         my $warning;
         my $content = do {
-            local $SIG{__WARN__} = sub { $warning = $_[0] };
+            local $SIG{__WARN__} = sub { $warning ||= $_[0] };
             $self->code->();
         };
         if ($warning) {
-            return Dancer::Error->new(
-                code    => 500,
-                message => "Warning caught during route execution: $warning",
-            )->render;
+            die "Warning caught during route execution: $warning";
         }
         return $content;
     }

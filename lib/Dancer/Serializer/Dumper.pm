@@ -1,10 +1,12 @@
 package Dancer::Serializer::Dumper;
+# ABSTRACT: Data::Dumper serialisation for Dancer
 
 use strict;
 use warnings;
 use Carp;
 use base 'Dancer::Serializer::Abstract';
 use Data::Dumper;
+use Dancer::Exception qw(:all);
 
 sub from_dumper {
     my ($string) = @_;
@@ -29,7 +31,7 @@ sub serialize {
 sub deserialize {
     my ($self, $content) = @_;
     my $res = eval "my \$VAR1; $content";
-    croak "unable to deserialize : $@" if $@;
+    raise core_serializer => "unable to deserialize : $@" if $@;
     return $res;
 }
 

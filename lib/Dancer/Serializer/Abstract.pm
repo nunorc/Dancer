@@ -1,4 +1,5 @@
 package Dancer::Serializer::Abstract;
+# ABSTRACT: Base serialiser class for Dancer
 
 use strict;
 use warnings;
@@ -8,7 +9,7 @@ use base 'Dancer::Engine';
 sub serialize   { confess 'must be implemented' }
 sub deserialize { confess 'must be implemented' }
 
-# must be implemented to delcare if the serializer can be used or not
+# must be implemented to declare if the serializer can be used or not
 # most of the time, just use :
 # Dancer::ModuleLoader->load('Your::Serializer::Deps');
 sub loaded {0}

@@ -1,4 +1,5 @@
 package Dancer::Request::Upload;
+#ABSTRACT: class representing file uploads requests
 
 use File::Spec;
 use Carp;
@@ -7,6 +8,7 @@ use strict;
 use warnings;
 use base 'Dancer::Object';
 use Dancer::FileUtils qw(open_file);
+use Dancer::Exception qw(:all);
 
 Dancer::Request::Upload->attributes(
     qw(
@@ -18,7 +20,7 @@ sub file_handle {
     my ($self) = @_;
     return $self->{_fh} if defined $self->{_fh};
     my $fh = open_file('<', $self->tempname) 
-      or croak "Can't open `" . $self->tempname . "' for reading: $!";
+      or raise core_request => "Can't open `" . $self->tempname . "' for reading: $!";
     $self->{_fh} = $fh;
 }
 
@@ -70,9 +72,20 @@ sub type {
 
 =pod
 
-=head1 NAME 
+=head1 SYNOPSIS
 
-Dancer::Request::Upload - class representing file uploads requests
+    # somewhere in your view:
+    <form action="/upload" method="POST" enctype="multipart/form-data">
+      <input type="file" name="filename">
+      <input type="submit">
+    </form>
+   
+    # and then in your application handler:
+    post '/upload' => sub {
+      my $file = request->upload('filename');
+      $file->copy_to($upload_dir);  # or whatever you need
+    };
+
 
 =head1 SYNOPSIS
 
@@ -94,7 +107,7 @@ file uploads.
 =head1 DESCRIPTION
 
 This class implements a representation of file uploads for Dancer.
-These objects are accesible within route handlers via the request->uploads 
+These objects are accessible within route handlers via the request->uploads 
 keyword. See L<Dancer::Request> for details.
 
 =head1 METHODS
@@ -153,7 +166,7 @@ The Content-Type of this upload.
 
 =head1 AUTHORS
 
-This module as been writen by Alexis Sukrieh, heavily based on
+This module as been written by Alexis Sukrieh, heavily based on
 L<Plack::Request::Upload>. Kudos to Plack authors.
 
 =head1 SEE ALSO

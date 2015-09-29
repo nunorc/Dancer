@@ -1,15 +1,19 @@
 package Dancer::Config;
+#ABSTRACT:  how to configure Dancer to suit your needs
 
 use strict;
 use warnings;
 use base 'Exporter';
 use vars '@EXPORT_OK';
 
+use Hash::Merge::Simple;
+use Dancer::Config::Object 'hashref_to_object';
 use Dancer::Deprecation;
 use Dancer::Template;
 use Dancer::ModuleLoader;
 use Dancer::FileUtils 'path';
 use Carp;
+use Dancer::Exception qw(:all);
 
 use Encode;
 
@@ -26,17 +30,21 @@ sub settings {$SETTINGS}
 my $setters = {
     logger => sub {
         my ($setting, $value) = @_;
+        require Dancer::Logger;
         Dancer::Logger->init($value, settings());
     },
     log_file => sub {
-        Dancer::Logger->init(setting("logger"), setting());
+        require Dancer::Logger;
+        Dancer::Logger->init(setting("logger"), settings());
     },
     session => sub {
         my ($setting, $value) = @_;
+        require Dancer::Session;
         Dancer::Session->init($value, settings());
     },
     template => sub {
         my ($setting, $value) = @_;
+        require Dancer::Template;
         Dancer::Template->init($value, settings());
     },
     route_cache => sub {
@@ -49,30 +57,23 @@ my $setters = {
         require Dancer::Serializer;
         Dancer::Serializer->init($value);
     },
+    # This setting has been deprecated in favor of global_warnings.
     import_warnings => sub {
+        my ($setting, $value) = @_;
+
+         Dancer::Deprecation->deprecated(
+             message => "import_warnings has been deprecated, please use global_warnings instead."
+         );
+
+        $^W = $value ? 1 : 0;
+    },
+    global_warnings => sub {
         my ($setting, $value) = @_;
         $^W = $value ? 1 : 0;
     },
-    auto_page => sub {
-        my ($setting, $auto_page) = @_;
-        if ($auto_page) {
-            require Dancer::App;
-            Dancer::App->current->registry->universal_add(
-                'get', '/:page',
-                sub {
-                    my $params = Dancer::SharedData->request->params;
-                    if  (-f Dancer::engine('template')->view($params->{page})) {
-                        return Dancer::template($params->{'page'});
-                    } else {
-                        return Dancer::pass();
-                    }
-                }
-            );
-        }
-    },
     traces => sub {
         my ($setting, $traces) = @_;
-        $Carp::Verbose = $traces ? 1 : 0;
+        $Dancer::Exception::Verbose = $traces ? 1 : 0;
     },
 };
 $setters->{log_path} = $setters->{log_file};
@@ -84,7 +85,7 @@ my $normalizers = {
           or return $charset;
         my $encoding = Encode::find_encoding($charset);
         defined $encoding
-          or croak "Charset defined in configuration is wrong : couldn't identify '$charset'";
+          or raise core_config => "Charset defined in configuration is wrong : couldn't identify '$charset'";
         my $name = $encoding->name;
         # Perl makes a distinction between the usual perl utf8, and the strict
         # utf8 charset. But we don't want to make this distinction
@@ -159,7 +160,11 @@ sub conffile { path(setting('confdir') || setting('appdir'), 'config.yml') }
 
 sub environment_file {
     my $env = setting('environment');
-    return path(setting('appdir'), 'environments', "$env.yml");
+    # XXX for compatibility reason, we duplicate the code from `init_envdir` here
+    # we don't know how if some application don't already do some weird stuff like
+    # the test in `t/15_plugins/02_config.t`.
+    my $envdir = setting('envdir') || path(setting('appdir'), 'environments');
+    return path($envdir, "$env.yml");
 }
 
 sub init_confdir {
@@ -167,29 +172,53 @@ sub init_confdir {
     setting confdir => $ENV{DANCER_CONFDIR} || setting('appdir');
 }
 
+sub init_envdir {
+    return setting('envdir') if setting('envdir');
+    my $appdirpath = defined setting('appdir')                 ?
+                     path( setting('appdir'), 'environments' ) :
+                     path('environments');
+
+    setting envdir => $ENV{DANCER_ENVDIR} || $appdirpath;
+}
+
 sub load {
     init_confdir();
+    init_envdir();
 
     # look for the conffile
     return 1 unless -f conffile;
 
     # load YAML
-    confess "Configuration file found but YAML is not installed"
-      unless Dancer::ModuleLoader->load('YAML');
+    my $module = $SETTINGS->{engines}{YAML}{module} || 'YAML';
 
-    if (!$_LOADED{conffile()}) {
+    my ( $result, $error ) = Dancer::ModuleLoader->load($module);
+    confess "Configuration file found but could not load $module: $error"
+        unless $result;
+
+    unless ($_LOADED{conffile()}) {
         load_settings_from_yaml(conffile);
         $_LOADED{conffile()}++;
     }
 
     my $env = environment_file;
-    if (-f $env && !$_LOADED{$env}) {
-        load_settings_from_yaml($env);
-        $_LOADED{$env}++;
+
+    # don't load the same env twice
+    unless( $_LOADED{$env} ) {
+        if (-f $env ) {
+            load_settings_from_yaml($env);
+            $_LOADED{$env}++;
+        }
+        elsif (setting('require_environment')) {
+            # failed to load the env file, and the main config said we needed it.
+            confess "Could not load environment file '$env', and require_environment is set";
+        }
     }
 
     foreach my $key (grep { $setters->{$_} } keys %$SETTINGS) {
         $setters->{$key}->($key, $SETTINGS->{$key});
+    }
+    if ( $SETTINGS->{strict_config} ) {
+        $SETTINGS = hashref_to_object($SETTINGS);
     }
 
     return 1;
@@ -198,46 +227,38 @@ sub load {
 sub load_settings_from_yaml {
     my ($file) = @_;
 
-    my $config;
+    my $config = eval { YAML::LoadFile($file) }
+        or confess "Unable to parse the configuration file: $file: $@";
 
-    eval { $config = YAML::LoadFile($file) };
-    if (my $err = $@ || (!$config)) {
-        confess "Unable to parse the configuration file: $file: $@";
-    }
+    $SETTINGS = Hash::Merge::Simple::merge( $SETTINGS, {
+        map {
+            $_ => Dancer::Config->normalize_setting( $_, $config->{$_} )
+        } keys %$config
+    } );
 
-    for my $key (keys %{$config}) {
-        if ($MERGEABLE{$key}) {
-            my $setting = setting($key);
-            $setting->{$_} = $config->{$key}{$_} for keys %{$config->{$key}};
-        }
-        else {
-            _set_setting($key, $config->{$key});
-        }
-    }
-
-    return scalar(keys %$config);
+    return scalar keys %$config;
 }
 
 sub load_default_settings {
-    $SETTINGS->{server}       ||= $ENV{DANCER_SERVER}       || '0.0.0.0';
-    $SETTINGS->{port}         ||= $ENV{DANCER_PORT}         || '3000';
-    $SETTINGS->{content_type} ||= $ENV{DANCER_CONTENT_TYPE} || 'text/html';
-    $SETTINGS->{charset}      ||= $ENV{DANCER_CHARSET}      || '';
-    $SETTINGS->{startup_info} ||= $ENV{DANCER_STARTUP_INFO} || 1;
-    $SETTINGS->{daemon}       ||= $ENV{DANCER_DAEMON}       || 0;
-    $SETTINGS->{apphandler}   ||= $ENV{DANCER_APPHANDLER}   || 'Standalone';
-    $SETTINGS->{warnings}     ||= $ENV{DANCER_WARNINGS}     || 0;
-    $SETTINGS->{auto_reload}  ||= $ENV{DANCER_AUTO_RELOAD}  || 0;
-    $SETTINGS->{traces}       ||= $ENV{DANCER_TRACES}       || 0;
-    $SETTINGS->{logger}       ||= $ENV{DANCER_LOGGER}       || 'file';
-    $SETTINGS->{environment} ||=
+    $SETTINGS->{server}        ||= $ENV{DANCER_SERVER}        || '0.0.0.0';
+    $SETTINGS->{port}          ||= $ENV{DANCER_PORT}          || '3000';
+    $SETTINGS->{content_type}  ||= $ENV{DANCER_CONTENT_TYPE}  || 'text/html';
+    $SETTINGS->{charset}       ||= $ENV{DANCER_CHARSET}       || '';
+    $SETTINGS->{startup_info}  ||= !$ENV{DANCER_NO_STARTUP_INFO};
+    $SETTINGS->{daemon}        ||= $ENV{DANCER_DAEMON}        || 0;
+    $SETTINGS->{apphandler}    ||= $ENV{DANCER_APPHANDLER}    || 'Standalone';
+    $SETTINGS->{warnings}      ||= $ENV{DANCER_WARNINGS}      || 0;
+    $SETTINGS->{auto_reload}   ||= $ENV{DANCER_AUTO_RELOAD}   || 0;
+    $SETTINGS->{traces}        ||= $ENV{DANCER_TRACES}        || 0;
+    $SETTINGS->{server_tokens} ||= !$ENV{DANCER_NO_SERVER_TOKENS};
+    $SETTINGS->{logger}        ||= $ENV{DANCER_LOGGER}        || 'file';
+    $SETTINGS->{environment}   ||=
          $ENV{DANCER_ENVIRONMENT}
       || $ENV{PLACK_ENV}
       || 'development';
 
     setting $_ => {} for keys %MERGEABLE;
     setting template        => 'simple';
-    setting import_warnings => 1;
 }
 
 load_default_settings();
@@ -247,10 +268,6 @@ load_default_settings();
 __END__
 
 =pod
-
-=head1 NAME
-
-Dancer::Config - how to configure Dancer to suit your needs
 
 =head1 DESCRIPTION
 
@@ -271,10 +288,24 @@ You can change a setting with the keyword B<set>, like the following:
 
 A better way of defining settings exists: using YAML file. For this to be
 possible, you have to install the L<YAML> module. If a file named B<config.yml>
-exists in the application directory, it will be loaded, as a setting group.
+exists in the application directory it will be loaded as a setting group.
 
 The same is done for the environment file located in the B<environments>
 directory.
+
+To fetch the available configuration values use the B<config> keyword that returns
+a reference to a hash:
+
+    my $port   = config->{port};
+    my $appdir = config->{appdir};
+
+By default, the module L<YAML> will be used to parse the configuration files.
+If desired, it is possible to use L<YAML::XS> instead by changing the YAML
+engine configuration in the application code:
+
+    config->{engines}{YAML}{module} = 'YAML::XS';
+
+See L<Dancer::Serializer::YAML> for more details.
 
 =head1 SUPPORTED SETTINGS
 
@@ -285,6 +316,8 @@ directory.
 The IP address that the Dancer app should bind to.  Default is 0.0.0.0, i.e.
 bind to all available interfaces.
 
+Can also be set with environment variable L<DANCER_SERVER|/"ENVIRONMENT VARIABLES">
+
 =head3 port (int)
 
 The port Dancer will listen to.
@@ -292,10 +325,14 @@ The port Dancer will listen to.
 Default value is 3000. This setting can be changed on the command-line with the
 B<--port> switch.
 
+Can also be set with environment variable L<DANCER_PORT|/"ENVIRONMENT VARIABLES">
+
 =head3 daemon (boolean)
 
 If set to true, runs the standalone webserver in the background.
 This setting can be changed on the command-line with the B<--daemon> flag.
+
+Can also be enabled by setting environment variable L<DANCER_DAEMON|/"ENVIRONMENT VARIABLES"> to a true value. 
 
 =head3 behind_proxy (boolean)
 
@@ -309,6 +346,8 @@ C<redirect>. This is useful if your application is behind a proxy.
 
 The default content type of outgoing content.
 Default value is 'text/html'.
+
+Can also be set with environment variable L<DANCER_CONTENT_TYPE|/"ENVIRONMENT VARIABLES">
 
 =head3 charset (string)
 
@@ -351,6 +390,8 @@ Also, since automatically serialized JSON responses have
 C<application/json> Content-Type, you should always encode them by
 hand.
 
+Can also be set with environment variable L<DANCER_CHARSET|/"ENVIRONMENT VARIABLES">
+
 =head3 default_mime_type (string)
 
 Dancer's L<Dancer::MIME> module uses C<application/data> as a default
@@ -365,9 +406,9 @@ C<text/plain>.
 =head3 environment (string)
 
 This is the name of the environment that should be used. Standard
-Dancer applications have a C<environments> folder with specific
+Dancer applications have an C<environments> folder with specific
 configuration files for different environments (usually development
-and production environments). They specify different kind of error
+and production environments). They specify different kinds of error
 reporting, deployment details, etc. These files are read after the
 generic C<config.yml> configuration file.
 
@@ -378,6 +419,8 @@ The running environment can be set with:
 Note that this variable is also used as a default value if other
 values are not defined.
 
+Can also be set with environment variable L<DANCER_ENVIRONMENT|/"ENVIRONMENT VARIABLES">
+
 =head3 appdir (directory)
 
 This is the path where your application will live.  It's where Dancer
@@ -387,13 +430,15 @@ content.
 It is typically set by C<use Dancer> to use the same directory as your
 script.
 
+Can also be set with environment variable L<DANCER_APPDIR|/"ENVIRONMENT VARIABLES">
+
 =head3 public (directory)
 
 This is the directory, where static files are stored. Any existing
 file in that directory will be served as a static file, before
 matching any route.
 
-By default, it points to $appdir/public.
+By default it points to $appdir/public.
 
 =head3 views (directory)
 
@@ -415,7 +460,7 @@ use Template Toolkit, add the following to C<config.yml>:
 =head3 layout (string)
 
 The name of the layout to use when rendering view. Dancer will look for
-a matching template in the directory $views/layout.
+a matching template in the directory $views/layouts.
 
 Your can override the default layout using the third argument of the
 C<template> keyword. Check C<Dancer> manpage for details.
@@ -423,30 +468,56 @@ C<template> keyword. Check C<Dancer> manpage for details.
 
 =head2 Logging, debugging and error handling
 
-=head3 import_warnings (boolean, default: enabled)
+=head3 strict_config (boolean, default: false)
 
-If true, or not present, C<use warnings> will be in effect in scripts in which
-you import C<Dancer>.  Set to a false value to disable this.
+If true, C<config> will return an object instead of a hash reference. See
+L<Dancer::Config::Object> for more information.
+
+=head3 global_warnings (boolean, default: false)
+
+If true, C<use warnings> will be in effect for all modules and scripts loaded
+by your Dancer application. Default is false.
+
+Can also be enabled by setting the environment variable L<DANCER_WARNINGS|/"ENVIRONMENT VARIABLES"> to
+a true value.
 
 =head3 startup_info (boolean)
 
-If set to true, prints a banner at the server start with information such as
-versions and the environment (or "dancerfloor").
+If set to true (the default), prints a banner at server startup with information such as
+versions and the environment (or "dancefloor").
 
-Conforms to the environment variable DANCER_STARTUP_INFO.
+Can also be disabled by setting the environment variable L<DANCER_NO_STARTUP_INFO|/"ENVIRONMENT VARIABLES"> to
+a true value.
 
 =head3 warnings (boolean)
 
-If set to true, tells Dancer to consider all warnings as blocking errors.
+If set to true, tells Dancer to consider all warnings as blocking errors. Default is false.
 
 =head3 traces (boolean)
 
 If set to true, Dancer will display full stack traces when a warning or a die
-occurs. (Internally sets Carp::Verbose). Default to false.
+occurs. (Internally sets Carp::Verbose). Default is false.
+
+Can also be enabled by setting environment variable L<DANCER_TRACES|/"ENVIRONMENT VARIABLES"> to a true value.
+
+=head3 require_environment (boolean)
+
+If set to true, Dancer will fail during startup if your environment file is
+missing or can't be read. This is especially useful in production when you
+have things like memcached settings that need to be set per-environment.
+Defaults to false.
+
+=head3 server_tokens (boolean)
+
+If set to true (the default), Dancer will add an "X-Powered-By" header and also append
+the Dancer version to the "Server" header.
+
+Can also be disabled by setting the environment variable L<DANCER_NO_SERVER_TOKENS|/"ENVIRONMENT VARIABLES"> to
+a true value.
 
 =head3 log_path (string)
 
-Folder where the ``file C<logger>'' saves logfiles.
+Folder where the ``file C<logger>'' saves log files.
 
 =head3 log_file (string)
 
@@ -469,6 +540,8 @@ L<Dancer::Logger::Syslog>, L<Dancer::Logger::Log4perl>, L<Dancer::Logger::PSGI>
 (which can, with the aid of Plack middlewares, send log messages to a browser's
 console window) and others.
 
+Can also be set with environment variable L<DANCER_LOGGER|/"ENVIRONMENT VARIABLES">
+
 =head3 log (enum)
 
 Tells which log messages should be actually logged. Possible values are
@@ -479,6 +552,8 @@ B<core>, B<debug>, B<warning> or B<error>.
 =item B<core> : all messages are logged, including some from Dancer itself
 
 =item B<debug> : all messages are logged
+
+=item B<info> : only info, warning and error messages are logged
 
 =item B<warning> : only warning and error messages are logged
 
@@ -525,28 +600,12 @@ The code throwing that error.
 =back
 
 
-=head3 auto_reload (boolean)
-
-Requires L<Module::Refresh> and L<Clone>.
-
-If set to true, Dancer will reload the route handlers whenever the file where
-they are defined is changed. This is very useful in development environment but
-B<should not be enabled in production>. Enabling this flag in production yields
-a major negative effect on performance because of L<Module::Refresh>.
-
-When this flag is set, you don't have to restart your webserver whenever you
-make a change in a route handler.
-
-Note that L<Module::Refresh> only operates on files in C<%INC>, so if the script
-your Dancer app is started from changes, even with auto_reload enabled, you will
-still not see the changes reflected until you start your app.
-
 =head2 Session engine
 
 =head3 session (enum)
 
-This setting lets you enable a session engine for your web application. Be
-default, sessions are disabled in Dancer, you must choose a session engine to
+This setting lets you enable a session engine for your web application. By
+default sessions are disabled in Dancer. You must choose a session engine to
 use them.
 
 See L<Dancer::Session> for supported engines and their respective configuration.
@@ -554,7 +613,7 @@ See L<Dancer::Session> for supported engines and their respective configuration.
 =head3 session_expires
 
 The session expiry time in seconds, or as e.g. "2 hours" (see
-L<Dancer::Cookie/expires>.  By default, there is no specific expiry time.
+L<Dancer::Cookie/expires>.  By default there is no specific expiry time.
 
 =head3 session_name
 
@@ -571,7 +630,14 @@ only be sent over HTTPS connections.
 
 This setting defaults to 1 and instructs the session cookie to be
 created with the C<HttpOnly> option active, meaning that JavaScript
-will not be able to access to its value.
+will not be able to access its value.
+
+=head3 session_domain
+
+Allows you to set the domain property on the cookie, which will
+override the default.  This is useful for setting the session cookie's
+domain to something like C<.domain.com> so that the same cookie will
+be applicable and usable across subdomains of a base domain.
 
 
 =head2 auto_page (boolean)
@@ -592,9 +658,74 @@ Simply enable auto_page in your config:
 Then, if you request C</foo/bar>, Dancer will look in the views dir for
 C</foo/bar.tt>.
 
-Dancer will honor your C<before_template> code, and all default
-variables. They will be accessible and interpolated on automatic
-served pages.
+Dancer will honor your C<before_template_render> code, and all default
+variables. They will be accessible and interpolated on automaticly-served pages.
+
+The pages served this way will have C<Content-Type> set to C<text/html>,
+so don't use the feature for anything else.
+
+=head2 Route caching
+
+=head3 route_cache (boolean)
+
+If true, enables route caching (for quicker route resolution on larger apps - not caching
+of responses).  See L<Dancer::Route::Cache> for details. Default is false.
+
+=head3 route_cache_size_limit (bytes)
+
+Maximum size of route cache (e.g. 1024, 2M). Defaults to 10M (10MB) - see L<Dancer::Route::Cache>
+
+=head3 route_cache_path_limit (number)
+
+Maximum number of routes to cache. Defaults to 600 - see L<Dancer::Route::Cache>
+
+
+=head2 DANCER_CONFDIR and DANCER_ENVDIR
+
+It's possible to set the configuration directory and environment directory using these two
+environment variables. Setting `DANCER_CONFDIR` will have the same effect as doing
+
+    set confdir => '/path/to/confdir'
+
+and setting `DANCER_ENVDIR` will be similar to:
+
+    set envdir => '/path/to/environments'
+
+=head1 ENVIRONMENT VARIABLES
+
+Some settings can be provided via environment variables at runtime, as detailed above; a full list of environment variables you can use follows.
+
+L<DANCER_APPDIR|/"appdir (directory)">
+
+DANCER_APPHANDLER a L<Dancer::Handler::*> by default L<Dancer::Handler::Standalone> 
+
+L<DANCER_AUTO_RELOAD|/"auto_reload (boolean)">
+
+L<DANCER_CHARSET|/"charset (string)">
+
+DANCER_CONFDIR
+
+L<DANCER_CONTENT_TYPE|/"content_type (string)">
+
+L<DANCER_DAEMON|/"daemon (boolean)">
+
+DANCER_ENVDIR
+
+L<DANCER_ENVIRONMENT|/"environment (string)">
+
+L<DANCER_NO_SERVER_TOKENS|/"server_tokens (boolean)">
+
+L<DANCER_NO_STARTUP_INFO|/"startup_info (boolean)">
+
+L<DANCER_LOGGER|/"logger (enum)">
+
+L<DANCER_PORT|/"port (int)">
+
+L<DANCER_SERVER|/"server (string)">
+
+L<DANCER_TRACES|/"traces (boolean)">
+
+L<DANCER_WARNINGS|/"global_warnings (boolean, default: false)">
 
 
 =head1 AUTHOR

@@ -1,4 +1,6 @@
 package Dancer::Session::Abstract;
+#ABSTRACT: abstract class for session engine
+
 use strict;
 use warnings;
 use Carp;
@@ -41,6 +43,10 @@ sub reset {
     return;
 }
 
+# if subclass overrides to true, flush will not be called after write
+# and subclass or application must call flush (perhaps in an after hook)
+sub is_lazy { 0 };
+
 # This is the default constructor for the session object, the only mandatory
 # attribute is 'id'. The whole object should be serialized by the session
 # engine.
@@ -56,8 +62,22 @@ sub session_name {
     setting('session_name') || 'dancer.session';
 }
 
+# May be overriden if session key value pairs aren't stored in the
+# session object's hash
+sub get_value {
+    my ( $self, $key ) = @_;
+    return $self->{$key};
+}
 
-# Methods below this this line should not be overloaded.
+# May be overriden if session key value pairs aren't stored in the
+# session object's hash
+sub set_value {
+    my ( $self, $key, $value ) = @_;
+    $self->{$key} = $value;
+}
+
+
+# Methods below this line should not be overloaded.
 
 # we try to make the best random number
 # with native Perl 5 code.
@@ -79,18 +99,21 @@ sub build_id {
 }
 
 sub read_session_id {
-    my $name = session_name();
-    my $c = Dancer::Cookies->cookies->{$name};
+    my ($class) = @_;
+
+    my $name = $class->session_name();
+    my $c    = Dancer::Cookies->cookies->{$name};
     return (defined $c) ? $c->value : undef;
 }
 
 sub write_session_id {
     my ($class, $id) = @_;
 
-    my $name = session_name();
+    my $name = $class->session_name();
     my %cookie = (
         name   => $name,
         value  => $id,
+        domain => setting('session_domain'),
         secure => setting('session_secure'),
         http_only => defined(setting("session_is_http_only")) ?
                      setting("session_is_http_only") : 1,
@@ -111,10 +134,6 @@ __END__
 
 =pod
 
-=head1 NAME
-
-Dancer::Session::Abstract - abstract class for session engine
-
 =head1 SPEC
 
 =over 4
@@ -126,8 +145,8 @@ needed to manipulate a session, whatever its storing engine is.
 
 =item B<id>
 
-The session id will be written to a cookie, by default named C<dancer.session>, 
-it is assumed that a client must accept cookies to be able to use a 
+The session id will be written to a cookie, by default named C<dancer.session>,
+it is assumed that a client must accept cookies to be able to use a
 session-aware Dancer webapp. (The cookie name can be change using the
 C<session_name> config setting.)
 
@@ -137,14 +156,15 @@ When the session engine is enabled, a I<before> filter takes care to initialize
 the appropriate session engine (according to the setting C<session>).
 
 Then, the filter looks for a cookie named C<dancer.session> (or whatever you've
-set the C<ssesion_name> setting to, if you've used it) in order to
+set the C<session_name> setting to, if you've used it) in order to
 I<retrieve> the current session object. If not found, a new session object is
 I<created> and its id written to the cookie.
 
 Whenever a session call is made within a route handler, the singleton
 representing the current session object is modified.
 
-After terminating the request, a I<flush> is made to the session object.
+A I<flush> is made to the session object after every modification unless
+the session engine overrides the C<is_lazy> method to return true.
 
 =back
 
@@ -165,6 +185,13 @@ These settings control how a session acts.
 The default session name is "dancer_session". This can be set in your config file:
 
     setting session_name: "mydancer_session"
+
+=head3 session_domain
+
+Allows you to set the domain property on the cookie, which will
+override the default.  This is useful for setting the session cookie's
+domain to something like C<.domain.com> so that the same cookie will
+be applicable and usable across subdomains of a base domain.
 
 =head3 session_secure
 
@@ -213,6 +240,15 @@ Returns a string with the name of cookie used for storing the session ID.
 You should probably not override this; the user can control the cookie name
 using the C<session_name> setting.
 
+=item B<get_value($key)>
+
+Retrieves the value associated with the key.
+
+=item B<set_value($key, $value)>
+
+Stores the value associated with the key.
+
+
 =back
 
 =head2 Inherited Methods
@@ -233,6 +269,12 @@ Reads the C<dancer.session> cookie.
 =item B<write_session_id>
 
 Write the current session id to the C<dancer.session> cookie.
+
+=item B<is_lazy>
+
+Default is false.  If true, session data will not be flushed after every
+modification and the session engine (or application) will need to ensure
+that a flush is called before the end of the request.
 
 =back
 

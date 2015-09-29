@@ -1,4 +1,5 @@
 package Dancer::Logger;
+#ABSTRACT: common interface for logging in Dancer
 
 # Factory for logger engines
 
@@ -20,18 +21,20 @@ sub _serialize {
     my @vars = @_;
 
     return join q{}, map {
-        ref $_                      ?
-            Data::Dumper->new([$_])
-                        ->Terse(1)
-                        ->Purity(1)
-                        ->Indent(0)
-                        ->Dump()    :
-            $_
+        ref $_ 
+            ? Data::Dumper->new([$_])
+                          ->Terse(1)
+                          ->Purity(1)
+                          ->Indent(0)
+                          ->Sortkeys(1)
+                          ->Dump()
+            : (defined($_) ? $_ : 'undef')
     } @vars;
 }
 
 sub core    { defined($logger) and $logger->core(    _serialize(@_) ) }
 sub debug   { defined($logger) and $logger->debug(   _serialize(@_) ) }
+sub info    { defined($logger) and $logger->info(    _serialize(@_) ) }
 sub warning { defined($logger) and $logger->warning( _serialize(@_) ) }
 sub error   { defined($logger) and $logger->error(   _serialize(@_) ) }
 
@@ -40,10 +43,6 @@ sub error   { defined($logger) and $logger->error(   _serialize(@_) ) }
 __END__
 
 =pod
-
-=head1 NAME
-
-Dancer::Logger - common interface for logging in Dancer
 
 =head1 DESCRIPTION
 

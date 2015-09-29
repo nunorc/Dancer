@@ -1,4 +1,5 @@
 package Dancer::Logger::Abstract;
+#ABSTRACT: Abstract logging engine for Dancer
 
 use strict;
 use warnings;
@@ -23,9 +24,10 @@ my $levels = {
 
     # levels > 0 are for end-users only
     debug   => 1,
-    warn    => 2,
-    warning => 2,
-    error   => 3,
+    info    => 2,
+    warn    => 3,
+    warning => 3,
+    error   => 4,
 };
 
 my $log_formats = {
@@ -60,11 +62,8 @@ sub format_message {
     my ($self, $level, $message) = @_;
     chomp $message;
 
-    if (setting('charset')) {
-        unless (uc setting('charset') eq "UTF-8" && Encode::is_utf8($message)) {
-            $message = Encode::encode(setting('charset'), $message);
-        }
-    }
+    $message = Encode::encode(setting('charset'), $message)
+        if setting('charset');
 
     $level = 'warn' if $level eq 'warning';
     $level = sprintf('%5s', $level);
@@ -78,6 +77,7 @@ sub format_message {
             return "[" . strftime( $block, localtime ) . "]";
         }
         elsif ( $type eq 'h' ) {
+            return '-' unless defined $r;
             return scalar $r->header($block) || '-';
         }
         else {
@@ -89,12 +89,15 @@ sub format_message {
     my $chars_mapping = {
         h => sub {
             defined $r
-              ? $r->env->{'HTTP_X_REAL_IP'} || $r->env->{'REMOTE_ADDR'}
+              ? $r->env->{'HTTP_X_REAL_IP'} || $r->env->{'REMOTE_ADDR'} || '-'
               : '-';
         },
-        t => sub { Encode::decode(setting('charset'),
+        t => sub { Encode::decode(setting('charset') || 'utf8',
                                   POSIX::strftime( "%d/%b/%Y %H:%M:%S", localtime )) },
         T => sub { POSIX::strftime( "%Y-%m-%d %H:%M:%S", localtime  ) },
+        u => sub { Encode::decode(setting('charset') || 'utf8',
+                                  POSIX::strftime( "%d/%b/%Y %H:%M:%S", gmtime )) },
+        U => sub { POSIX::strftime( "%Y-%m-%d %H:%M:%S", gmtime  ) },
         P => sub { $$ },
         L => sub { $level },
         D => sub {
@@ -122,28 +125,25 @@ sub format_message {
 
     my $fmt = $self->_log_format();
 
-    $fmt =~ s{
+    $fmt =~ s^
         (?:
             \%\{(.+?)\}([a-z])|
             \%([a-zA-Z])
         )
-    }{ $1 ? $block_handler->($1, $2) : $char_mapping->($3) }egx;
+    ^ $1 ? $block_handler->($1, $2) : $char_mapping->($3) ^egx;
 
     return $fmt."\n";
 }
 
 sub core    { $_[0]->_should('core')    and $_[0]->_log('core',    $_[1]) }
 sub debug   { $_[0]->_should('debug')   and $_[0]->_log('debug',   $_[1]) }
+sub info    { $_[0]->_should('info')    and $_[0]->_log('info',    $_[1]) }
 sub warning { $_[0]->_should('warning') and $_[0]->_log('warning', $_[1]) }
 sub error   { $_[0]->_should('error')   and $_[0]->_log('error',   $_[1]) }
 
 1;
 
 __END__
-
-=head1 NAME
-
-Dancer::Logger::Abstract - Abstract logging engine for Dancer
 
 =head1 SYNOPSIS
 
@@ -178,7 +178,19 @@ host emitting the request
 
 =item %t
 
-date (formatted like %d/%b/%Y %H:%M:%S)
+date (local timezone, formatted like %d/%b/%Y %H:%M:%S)
+
+=item %T
+
+date (local timezone, formatted like %Y-%m-%d %H:%M:%S)
+
+=item %u
+
+date (UTC timezone, formatted like %d/%b/%Y %H:%M:%S)
+
+=item %U
+
+date (UTC timezone, formatted like %Y-%m-%d %H:%M:%S)
 
 =item %P
 
@@ -218,17 +230,13 @@ header value
 
 =back
 
-There is two preset possible:
+There is currently a single preset log format:
 
 =over 4
 
 =item simple
 
-will format the message like: [%P] %L @%D> %m in %f l. %l
-
-=item with_id
-
-will format the message like: [%P] %L @%D> [hit #%i] %m in %f l. %l
+will format the message like: [%P] %L @%D> %i%m in %f l. %l
 
 =back
 
@@ -254,6 +262,10 @@ Logs messages as warning.
 
 Logs messages as error.
 
+=head2 info
+
+Logs messages as info.
+
 =head2 _log
 
 A method to override. If your logger does not provide this, it will cause the
@@ -261,20 +273,6 @@ application to die.
 
 =head2 _should
 
-Checks a certain level number against a certain level type (core, debug,
+Checks a certain level number against a certain level type (core, debug, info
 warning, error).
-
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2010 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
 

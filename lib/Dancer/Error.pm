@@ -1,8 +1,10 @@
 package Dancer::Error;
+#ABSTRACT: class for representing fatal errors
 
 use strict;
 use warnings;
 use Carp;
+use Scalar::Util qw(blessed);
 
 use base 'Dancer::Object';
 
@@ -14,6 +16,7 @@ use Dancer::Factory::Hook;
 use Dancer::Session;
 use Dancer::FileUtils qw(open_file);
 use Dancer::Engine;
+use Dancer::Exception qw(:all);
 
 Dancer::Factory::Hook->instance->install_hooks(
     qw/before_error_render after_error_render before_error_init/);
@@ -116,19 +119,24 @@ sub dumper {
 
 
     # Take a copy of the data, so we can mask sensitive-looking stuff:
-    my %data     = Dancer::ModuleLoader->load('Clone') ?
-                   %{ Clone::clone($obj) }             :
-                   %$obj;
-    my $censored = _censor(\%data);
+    my $data     = Dancer::ModuleLoader->load('Clone') ?
+                   Clone::clone($obj)
+                   : eval Data::Dumper->new([$obj])->Purity(1)->Terse(1)->Deepcopy(1)->Dump;
+
+    $data = {%$data} if blessed($data); 
+
+	my $censored = _censor($data);
 
     #use Data::Dumper;
-    my $dd = Data::Dumper->new([\%data]);
-    $dd->Terse(1)->Quotekeys(0)->Indent(1);
+    my $dd = Data::Dumper->new([$data]);
+    $dd->Terse(1)->Quotekeys(0)->Indent(1)->Sortkeys(1);
     my $content = $dd->Dump();
     $content =~ s{(\s*)(\S+)(\s*)=>}{$1<span class="key">$2</span>$3 =&gt;}g;
     if ($censored) {
         $content
-          .= "\n\nNote: Values of $censored sensitive-looking keys hidden\n";
+            .= "\n\nNote: Values of $censored sensitive-looking key"
+            . ($censored == 1 ? '' : 's')
+            . " hidden\n";
     }
     return $content;
 }
@@ -136,7 +144,17 @@ sub dumper {
 # Given a hashref, censor anything that looks sensitive.  Returns number of
 # items which were "censored".
 sub _censor {
-    my $hash = shift;
+    my ( $hash, $recursecount ) = @_;
+    $recursecount ||= 0;
+
+    # we're checking recursion ourselves, no need to warn
+    no warnings 'recursion';
+
+    if ( $recursecount++ > 100 ) {
+        warn "Data exceeding 100 levels, truncating\n";
+        return $hash;
+    }
+
     if (!$hash || ref $hash ne 'HASH') {
         carp "_censor given incorrect input: $hash";
         return;
@@ -145,9 +163,9 @@ sub _censor {
     my $censored = 0;
     for my $key (keys %$hash) {
         if (ref $hash->{$key} eq 'HASH') {
-            $censored += _censor($hash->{$key});
+            $censored += _censor( $hash->{$key}, $recursecount );
         }
-        elsif ($key =~ /(pass|card?num|pan|secret)/i) {
+        elsif ($key =~ /(pass|card?num|pan|cvv|cvv2|ccv|secret|private_key)/i) {
             $hash->{$key} = "Hidden (looks potentially sensitive)";
             $censored++;
         }
@@ -174,7 +192,16 @@ sub render {
 
     my $serializer = setting('serializer');
     Dancer::Factory::Hook->instance->execute_hooks('before_error_render', $self);
-    my $response = $serializer ? $self->_render_serialized() : $self->_render_html();
+    my $response;
+    try {
+        $response = $serializer ? $self->_render_serialized() : $self->_render_html();
+    } continuation {
+        my ($continuation) = @_;
+        # If we have a Route continuation, run the after hook, then
+        # propagate the continuation
+        Dancer::Factory::Hook->instance->execute_hooks('after_error_render', $response);
+        $continuation->rethrow();
+    };
     Dancer::Factory::Hook->instance->execute_hooks('after_error_render', $response);
     $response;
 }
@@ -184,8 +211,15 @@ sub _render_serialized {
 
     my $message =
       !ref $self->message ? {error => $self->message} : $self->message;
-    ref $message eq 'HASH' && defined $self->exception
-      and $message->{exception} = $self->exception;
+
+    if (ref $message eq 'HASH' && defined $self->exception) {
+        if (blessed($self->exception)) {
+            $message->{exception} = ref($self->exception);
+            $message->{exception} =~ s/^Dancer::Exception:://;
+        } else {
+            $message->{exception} = $self->exception;
+        }
+    }
 
     if (setting('show_errors')) {
         Dancer::Response->new(
@@ -284,9 +318,6 @@ __END__
 
 =pod
 
-=head1 NAME
-
-Dancer::Error - class for representing fatal errors
 
 =head1 SYNOPSIS
 
@@ -298,7 +329,7 @@ Dancer::Error - class for representing fatal errors
         message => "No such file: `$path'"
     );
 
-    Dancer::Response->set($error->render);
+    $error->render;
 
 =head1 DESCRIPTION
 
@@ -328,6 +359,14 @@ The message of the error page.
 
 This is only an attribute getter, you'll have to set it at C<new>.
 
+=head2 exception
+
+The exception that caused the error. If the error was not caused by an
+exception, returns undef. Exceptions are usually objects that inherit from
+Dancer::Exception.
+
+This is only an attribute getter, you'll have to set it at C<new>.
+
 =head1 METHODS/SUBROUTINES
 
 =head2 new
@@ -350,6 +389,10 @@ The code that caused the error.
 
 The message that will appear to the user.
 
+=head3 exception
+
+The exception that will be useable by the rendering.
+
 =head2 backtrace
 
 Create a backtrace of the code where the error is caused.
@@ -357,7 +400,7 @@ Create a backtrace of the code where the error is caused.
 This method tries to find out where the error appeared according to the actual
 error message (using the C<message> attribute) and tries to parse it (supporting
 the regular/default Perl warning or error pattern and the L<Devel::SimpleTrace>
-output) and then returns an error-higlighted C<message>.
+output) and then returns an error-highlighted C<message>.
 
 =head2 tabulate
 
@@ -379,7 +422,7 @@ C<get_caller>), the settings and environment (using C<dumper>) and more.
 
 =head2 get_caller
 
-Creates a strack trace of callers.
+Creates a stack trace of callers.
 
 =head2 _censor
 
@@ -391,19 +434,5 @@ C<dumper> calls this method to censor things like passwords and such.
 
 Internal method to encode entities that are illegal in (X)HTML. We output as
 UTF-8, so no need to encode all non-ASCII characters or use a module.
-FIXME : this is not true anymore, output can be any charset. Need fixing.
-
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2010 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
+FIXME : this is not true any more, output can be any charset. Need fixing.
 

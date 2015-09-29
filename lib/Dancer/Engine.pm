@@ -1,4 +1,5 @@
 package Dancer::Engine;
+#ABSTRACT: base class for Dancer engines
 
 # This is the base-class of every engine abstract class.
 # This allow us to put in that single place the engine creation
@@ -9,6 +10,7 @@ use warnings;
 use Carp;
 use Dancer::ModuleLoader;
 use base 'Dancer::Object';
+use Dancer::Exception qw(:all);
 
 # constructor arguments:
 #      name     => $name_of_the_engine
@@ -30,7 +32,7 @@ sub config {
 sub build {
     my ($class, $type, $name, $config) = @_;
 
-    croak "cannot build engine without type and name "
+    raise core_engine => "cannot build engine without type and name "
       unless $name and $type;
 
     my $class_name = $class->_engine_class($type);
@@ -43,9 +45,20 @@ sub build {
     my $engine_class =
       Dancer::ModuleLoader->class_from_setting($class_name => $name);
 
-    croak "unknown $type engine '$name', "
-      . "perhaps you need to install $engine_class?"
-      unless Dancer::ModuleLoader->load($engine_class);
+    my( $loaded, $error ) = Dancer::ModuleLoader->load($engine_class);
+    $error = '' unless defined $error;
+
+    unless( $loaded ) {
+        my $tip = '';
+        if( $error =~ /Can't locate (\S+)\.pm in \@INC/ ) {
+            my $module = $1;
+            $module =~ s#/#::#g;
+            $tip = " (perhaps you need to install $module?)";
+        }
+
+        $error = ": $error" if length $error;
+        raise core_engine => "unable to load $type engine '$name'$tip$error";
+    }
 
     # creating the engine
     return $engine_class->new(
@@ -72,10 +85,6 @@ sub engine {
 __END__
 
 =pod
-
-=head1 NAME
-
-Dancer::Engine - base class for Dancer engines
 
 =head1 SYNOPSIS
 
@@ -122,18 +131,4 @@ You can B<only> set the configuration at initialization time, not after.
 Builds and returns the engine.
 
     my $engine = Dancer::Engine->build( $type => $name, $config );
-
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2010 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
 

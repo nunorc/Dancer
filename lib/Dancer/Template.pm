@@ -1,4 +1,5 @@
 package Dancer::Template;
+#ABSTRACT: template wrapper for Dancer
 
 use strict;
 use warnings;
@@ -22,10 +23,6 @@ __END__
 
 =pod
 
-=head1 NAME
-
-Dancer::Template - template wrapper for Dancer
-
 =head1 DESCRIPTION
 
 This module is the wrapper that provides support for different 
@@ -35,7 +32,7 @@ template engines.
 
 =head2 Default engine
 
-The default engine used by Dancer::Template is Dancer::Template::Simple.
+The default engine used by Dancer::Template is L<< Dancer::Template::Simple >>.
 If you want to change the engine used, you have to edit the B<template>
 configuration variable.
 

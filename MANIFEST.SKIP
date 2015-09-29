@@ -14,3 +14,17 @@ Makefile$
 ^.*\.swp$
 lib/Dancer/Plugin/WebSocket.pm
 ^.*~$
+MYMETA\..*
+^.travis.yml$
+contrib/update_authors.pl
+.current_cover_stats
+.gitignore
+.perlcriticrc
+.perltidyrc
+Dancer-.*.tar.gz
+MANIFEST.SKIP
+performance
+TODO
+^Dancer-.*
+dist.ini
+.mailmap

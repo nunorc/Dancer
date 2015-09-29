@@ -1,4 +1,6 @@
 package Dancer::Logger::File;
+#ABSTRACT: file-based logging engine for Dancer
+
 use strict;
 use warnings;
 use Carp;
@@ -7,31 +9,31 @@ use base 'Dancer::Logger::Abstract';
 use Dancer::Config 'setting';
 use Dancer::FileUtils qw(open_file);
 use IO::File;
+use Fcntl qw(:flock SEEK_END);
 
 sub logdir {
-    my $altpath = setting('log_path');
-    return $altpath if $altpath;
+    if ( my $altpath = setting('log_path') ) {
+        return $altpath;
+    }
 
     my $logroot = setting('appdir');
 
-    if ($logroot) {
-        if (!-d $logroot && not mkdir $logroot) {
-            carp "log directory $logroot doesn't exist, am unable to create it";
-            return;
-        }
+    if ( $logroot and ! -d $logroot and ! mkdir $logroot ) {
+        carp "app directory '$logroot' doesn't exist, am unable to create it";
+        return;
     }
 
     my $expected_path = $logroot                                  ?
                         Dancer::FileUtils::path($logroot, 'logs') :
                         Dancer::FileUtils::path('logs');
 
-    return $expected_path if (-d $expected_path && -x _ && -w _);
+    return $expected_path if -d $expected_path && -x _ && -w _;
 
     unless (-w $logroot and -x _) {
         my $perm = (stat $logroot)[2] & 07777;
         chmod($perm | 0700, $logroot);
         unless (-w $logroot and -x _) {
-            carp "log directory $logroot isn't writable/executable and can't chmod it";
+            carp "app directory '$logroot' isn't writable/executable and can't chmod it";
             return;
         }
     }
@@ -55,7 +57,12 @@ sub init {
         carp "unable to create or append to $logfile";
         return;
     }
-    $fh->autoflush;
+
+    # looks like older perls don't auto-convert to IO::File
+    # and can't autoflush
+    # see https://github.com/PerlDancer/Dancer/issues/954
+    eval { $fh->autoflush };
+
     $self->{logfile} = $logfile;
     $self->{fh} = $fh;
 }
@@ -66,17 +73,20 @@ sub _log {
 
     return unless(ref $fh && $fh->opened);
 
+    flock($fh, LOCK_EX)
+        or carp "locking logfile $self->{logfile} failed";
+    seek($fh, 0, SEEK_END)
+        or carp "seeking to logfile $self->{logfile} end failed";
     $fh->print($self->format_message($level => $message))
         or carp "writing to logfile $self->{logfile} failed";
+    flock($fh, LOCK_UN)
+        or carp "unlocking logfile $self->{logfile} failed";
+
 }
 
 1;
 
 __END__
-
-=head1 NAME
-
-Dancer::Logger::File - file-based logging engine for Dancer
 
 =head1 SYNOPSIS
 
@@ -103,18 +113,4 @@ It's also possible to specify a logs directory with the log_path option.
 =head2 _log
 
 Writes the log message to the file.
-
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2010 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
 

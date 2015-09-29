@@ -1,10 +1,13 @@
 package Dancer::Route::Registry;
+# ABSTRACT: Route registry for Dancer
+
 use strict;
 use warnings;
 use Carp;
 use Dancer::Route;
 use base 'Dancer::Object';
 use Dancer::Logger;
+use Dancer::Exception qw(:all);
 
 Dancer::Route::Registry->attributes(qw( id ));
 
@@ -50,7 +53,7 @@ sub add_route {
     my $last       = $registered[-1];
     $route->set_previous($last) if defined $last;
 
-    # if the route have options, we store the route at the begining
+    # if the route have options, we store the route at the beginning
     # of the routes. This way, we can have the following routes:
     # get '/' => sub {} and ajax '/' => sub {}
     # and the user won't have to declare the ajax route before the get
@@ -91,14 +94,17 @@ sub register_route {
 sub any_add {
     my ($self, $pattern, @rest) = @_;
 
-    my @methods = qw(get post put delete options);
+    my @methods = qw(get post put patch delete options head);
 
     if (ref($pattern) eq 'ARRAY') {
         @methods = @$pattern;
+        # 'get' defaults to 'get' and 'head'
+        push @methods, 'head' if ((grep { $_ eq 'get' } @methods) and
+                                 not (grep { $_ eq 'head' } @methods));
         $pattern = shift @rest;
     }
 
-    croak "Syntax error, methods should be provided as an ARRAY ref"
+    raise core_route => "Syntax error, methods should be provided as an ARRAY ref"
       if grep {$_ eq $pattern} @methods;
 
     $self->universal_add($_, $pattern, @rest) for @methods;

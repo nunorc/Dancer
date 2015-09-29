@@ -1,4 +1,5 @@
 package Dancer::Response;
+#ABSTRACT: Response object for Dancer
 
 use strict;
 use warnings;
@@ -12,6 +13,7 @@ use Dancer::MIME;
 use HTTP::Headers;
 use Dancer::SharedData;
 use Dancer::Exception qw(:all);
+use Dancer::Continuation::Halted;
 
 __PACKAGE__->attributes(qw/content pass streamed/);
 
@@ -94,14 +96,9 @@ sub halt {
         Dancer::SharedData->response($content);
     }
     else {
-        # This also sets the Response as the current one (SharedData)
-        Dancer::Response->new(
-            status => ($self->status || 200),
-            content => $content,
-            halted => 1,
-        );
+        $self->content($content) if defined $content;
+        $self->{halted} = 1;
     }
-    raise E_HALTED;
 }
 
 sub halted {
@@ -143,6 +140,9 @@ sub headers {
 sub headers_to_array {
     my $self = shift;
 
+    # Time to finalise cookie headers, now
+    $self->build_cookie_headers;
+
     my $headers = [
         map {
             my $k = $_;
@@ -157,11 +157,33 @@ sub headers_to_array {
     return $headers;
 }
 
+# Given a cookie name and object, add it to the cookies we're going to send.
+# Stores them in a hashref within the response object until the response is
+# being built, so that, if the same cookie is set multiple times, only the last
+# value given to it will appear in a Set-Cookie header.
+sub add_cookie {
+    my ($self, $name, $cookie) = @_;
+    if ($self->{_built_cookies}) {
+        die "Too late to set another cookie, headers already built";
+    }
+    $self->{_cookies}{$name} = $cookie;
+}
+
+
+# When the response is about to be rendered, that's when we build up the
+# Set-Cookie headers
+sub build_cookie_headers {
+    my $self = shift;
+    for my $name (keys %{ $self->{_cookies} }) {
+        my $header = $self->{_cookies}{$name}->to_header;
+        $self->push_header(
+            'Set-Cookie' => $header,
+        );
+    }
+    $self->{_built_cookies}++;
+}
 1;
 
-=head1 NAME
-
-Dancer::Response - Response object for Dancer
 
 =head1 SYNOPSIS
 
@@ -189,10 +211,10 @@ Dancer::Response - Response object for Dancer
     Dancer::Response->new(
         status  => 200,
         content => 'my content',
-        headers => HTTP::Headers->new(...),
+        headers => ['X-Foo' => 'foo-value', 'X-Bar' => 'bar-value'],
     );
 
-create and return a new L<Dancer::Response> object
+create and return a new Dancer::Response object
 
 =head2 current
 
@@ -231,7 +253,7 @@ set or get the content of the current response object
     $response->status(201);
     Dancer::SharedData->response->status(201);
 
-set or get the status of the current response object
+Set or get the status of the current response object.  The default status is 200.
 
 =head2 content_type
 
@@ -243,14 +265,14 @@ set or get the status of the current response object
     $response->content_type('application/json');
     Dancer::SharedData->response->content_type('application/json');
 
-set or get the status of the current response object
+Set or get the status of the current response object.
 
 =head2 pass
 
     $response->pass;
     Dancer::SharedData->response->pass;
 
-set the pass value to one for this response
+Set the pass value to one for this response.
 
 =head2 has_passed
 
@@ -262,12 +284,14 @@ set the pass value to one for this response
         ...
     }
 
-test if the pass value is set to true
+Test if the pass value is set to true.
 
-=head2 halt
+=head2 halt($content)
 
     Dancer::SharedData->response->halt();
     $response->halt;
+
+Stops the processing of the current request.  See L<Dancer/halt>.
 
 =head2 halted
 
@@ -279,6 +303,8 @@ test if the pass value is set to true
         ...
     }
 
+This flag will be true if the current response has been halted.
+
 =head2 header
 
     # set the header
@@ -289,20 +315,20 @@ test if the pass value is set to true
     my $header = $response->header('X-Foo');
     my $header = Dancer::SharedData->response->header('X-Foo');
 
-get or set the value of a header
+Get or set the value of a header.
 
 =head2 headers
 
-    $response->headers(HTTP::Headers->new(...));
-    Dancer::SharedData->response->headers(HTTP::Headers->new(...));
+    $response->headers('X-Foo' => 'fff', 'X-Bar' => 'bbb');
+    Dancer::SharedData->response->headers('X-Foo' => 'fff', 'X-Bar' => 'bbb');
 
-return the list of headers for the current response
+Return the list of headers for the current response.
 
 =head2 headers_to_array
 
     my $headers_psgi = $response->headers_to_array();
     my $headers_psgi = Dancer::SharedData->response->headers_to_array();
 
-this method is called before returning a PSGI response. It transforms the list of headers to an array reference.
+This method is called before returning a L<< PSGI >> response. It transforms the list of headers to an array reference.
 
 

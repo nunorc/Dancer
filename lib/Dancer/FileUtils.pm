@@ -1,12 +1,19 @@
 package Dancer::FileUtils;
+#ABSTRACT: helper providing file utilities
 
 use strict;
 use warnings;
 
+use IO::File;
+
 use File::Basename ();
 use File::Spec;
+use File::Temp qw(tempfile);
+
 use Carp;
 use Cwd 'realpath';
+
+use Dancer::Exception qw(:all);
 
 use base 'Exporter';
 use vars '@EXPORT_OK';
@@ -14,6 +21,7 @@ use vars '@EXPORT_OK';
 @EXPORT_OK = qw(
     dirname open_file path read_file_content read_glob_content
     path_or_empty set_file_mode normalize_path
+    atomic_write
 );
 
 # path should not verify paths
@@ -33,22 +41,6 @@ sub path_or_empty {
     return -e $path ? $path : '';
 }
 
-sub path_no_verify {
-    my @nodes = File::Spec->splitpath(d_catdir(@_)); # 0=vol,1=dirs,2=file
-    my $path = '';
-
-    # [0->?] path(must exist),[last] file(maybe exists)
-    if($nodes[1]) {
-        $path = realpath(File::Spec->catpath(@nodes[0 .. 1],'')) . '/';
-    } else {
-        $path = Cwd::cwd . '/';
-    }
-
-    $path .= $nodes[2];
-
-    return $path;
-}
-
 sub dirname { File::Basename::dirname(@_) }
 
 sub set_file_mode {
@@ -65,7 +57,7 @@ sub open_file {
     my ( $mode, $filename ) = @_;
 
     open my $fh, $mode, $filename
-      or croak "$! while opening '$filename' using mode '$mode'";
+      or raise core_fileutils => "$! while opening '$filename' using mode '$mode'";
 
     return set_file_mode($fh);
 }
@@ -141,15 +133,20 @@ sub _trim_UNC {
     return @args;
 }
 
+sub atomic_write {
+    my ($path, $file, $data) = @_;
+    my ($fh, $filename) = tempfile("tmpXXXXXXXXX", DIR => $path);
+    set_file_mode($fh);
+    print $fh $data;
+    close $fh or die "Can't close '$file': $!\n";
+    rename($filename, $file) or die "Can't move '$filename' to '$file'";
+}
+
 1;
 
 __END__
 
 =pod
-
-=head1 NAME
-
-Dancer::FileUtils - helper providing file utilities
 
 =head1 SYNOPSIS
 
@@ -218,7 +215,7 @@ Provides comfortable path resolving, internally using L<File::Spec>.
 Returns either the content of a file (whose filename is the input), I<undef>
 if the file could not be opened.
 
-In array context it returns each line (as defined by $/) as a seperate element;
+In array context it returns each line (as defined by $/) as a separate element;
 in scalar context returns the entire contents of the file.
 
 =head2 read_glob_content
@@ -245,16 +242,3 @@ charset setting.
 
 Nothing by default. You can provide a list of subroutines to import.
 
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2011 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.

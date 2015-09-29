@@ -1,4 +1,6 @@
 package Dancer::Cookies;
+#ABSTRACT: a singleton storage for all cookies
+
 use strict;
 use warnings;
 
@@ -36,11 +38,16 @@ sub parse_cookie_from_env {
         # a cookie string can contains something like:
         # cookie_name="foo=bar"
         # we want `cookie_name' as the value and `foo=bar' as the value
-        my( $name,$value ) = split(/\s*=\s*/, $cookie, 2);
+        my( $name, $value ) = split /\s*=\s*/, $cookie, 2;
+
+        # catch weird entries like 'cookie1=foo;;cookie2=bar'
+        next unless length $name;
+
         my @values;
-        if ( $value ne '' ) {
+        if ( defined $value && $value ne '' ) {
             @values = map { uri_unescape($_) } split( /[&;]/, $value );
         }
+
         $cookies->{$name} =
           Dancer::Cookie->new( name => $name, value => \@values );
     }
@@ -63,18 +70,13 @@ sub set_cookie {
 
 sub set_cookie_object {
     my ($class, $name, $cookie) = @_;
-    Dancer::SharedData->response->push_header(
-        'Set-Cookie' => $cookie->to_header);
+    Dancer::SharedData->response->add_cookie($name, $cookie);
     Dancer::Cookies->cookies->{$name} = $cookie;
 }
 
 1;
 
 __END__
-
-=head1 NAME
-
-Dancer::Cookies - a singleton storage for all cookies
 
 =head1 SYNOPSIS
 
@@ -127,18 +129,4 @@ Fetches all the cookies from the environment, parses them and creates a hashref
 of all cookies.
 
 It also returns all the hashref it created.
-
-=head1 AUTHOR
-
-Alexis Sukrieh
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2009-2010 Alexis Sukrieh.
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of either: the GNU General Public License as published
-by the Free Software Foundation; or the Artistic License.
-
-See http://dev.perl.org/licenses/ for more information.
 

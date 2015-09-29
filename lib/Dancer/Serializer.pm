@@ -1,4 +1,5 @@
 package Dancer::Serializer;
+#ABSTRACT: serializer wrapper for Dancer
 
 # Factory for serializer engines
 
@@ -74,20 +75,36 @@ sub process_request {
     Dancer::Factory::Hook->execute_hooks('before_deserializer');
 
     return $request unless engine;
-    return $request
-      unless engine->support_content_type($request->content_type);
 
-    return $request unless $request->is_put || $request->is_post;
+    # Content-Type may contain additional parameters
+    # (http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html#sec3.7)
+    # which should be safe to ignore at this level.
+    # So accept either e.g. text/xml or text/xml; charset=utf-8
+    my $content_type = $request->content_type;
+    $content_type =~ s/ \s* ; .+ $ //x;
+    return $request unless engine->support_content_type($content_type);
+
+    return $request
+      unless $request->is_put 
+          or $request->is_post 
+          or $request->is_patch 
+          or $request->is_delete;
 
     my $old_params = $request->params('body');
 
     # try to deserialize
     my $new_params;
-    eval { $new_params = engine->deserialize($request->body) };
+    eval {
+        $new_params = engine->deserialize($request->body)
+    };
     if ($@) {
         Dancer::Logger::core "Unable to deserialize request body with "
           . engine()
           . " : \n$@";
+        return $request;
+    }
+
+    if(!ref $new_params or ref $new_params ne 'HASH'){
         return $request;
     }
 
@@ -106,10 +123,6 @@ sub process_request {
 __END__
 
 =pod
-
-=head1 NAME
-
-Dancer::Serializer - serializer wrapper for Dancer
 
 =head1 DESCRIPTION
 
@@ -138,15 +151,15 @@ When in a route you return a Perl data structure, it will be
 serialized automatically to the respective serialized engine (for
 instance, C<JSON>).
 
-For C<PUT> and C<POST> methods you can access the C<request->body> as
-a string, and you can unserialize it, if you really need. If your
-content type is recognized by the serializer, C<request->body> will be
+For C<PUT> and C<POST> methods you can access the C<< request->body >> as
+a string, and you can unserialize it, if you really need to. If your
+content type is recognized by the serializer, C<< request->body >> will be
 unserialized automatically, and it will be available as a standard
 parameter.
 
 For instance, if you call
 
- curl -X POST -H 'Content-Type: application/json -d "{'id':'bar'}" /foo
+ curl -X POST -H 'Content-Type: application/json' -d '{"id":"bar"}' /foo
 
 your C<foo> route can do something like:
 

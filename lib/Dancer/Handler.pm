@@ -1,8 +1,9 @@
 package Dancer::Handler;
+# ABSTRACT: Dancer request handler
 
 use strict;
 use warnings;
-use Carp 'croak';
+use Carp;
 
 use File::stat;
 use HTTP::Headers;
@@ -14,8 +15,13 @@ use Dancer::Renderer;
 use Dancer::Config 'setting';
 use Dancer::ModuleLoader;
 use Dancer::Exception qw(:all);
+use Dancer::Factory::Hook;
 
 use Encode;
+
+Dancer::Factory::Hook->instance->install_hooks(
+    qw/on_handler_exception/
+);
 
 # This is where we choose which application handler to return
 sub get_handler {
@@ -25,7 +31,6 @@ sub get_handler {
     if ($ENV{'PLACK_ENV'}) {
         Dancer::Logger::core("PLACK_ENV is set (".$ENV{'PLACK_ENV'}.") forcing PSGI handler");
         setting('apphandler'  => 'PSGI');
-        setting('environment' => $ENV{'PLACK_ENV'});
     }
 
     # if Plack is detected or set by conf, use the PSGI handler
@@ -35,7 +40,7 @@ sub get_handler {
 
     # load the app handler
     my ($loaded, $error) = Dancer::ModuleLoader->load($handler);
-    croak "Unable to load app handler `$handler': $error" if $error;
+    raise core_handler => "Unable to load app handler `$handler': $error" if $error;
 
     # OK, everything's fine, load the handler
     Dancer::Logger::core('loading ' . $handler . ' handler');
@@ -65,9 +70,7 @@ sub handle_request {
 
     Dancer::Cookies->init;
 
-    if (Dancer::Config::setting('auto_reload')) {
-        Dancer::App->reload_apps;
-    }
+    Dancer::App->reload_apps if Dancer::Config::setting('auto_reload');
 
     render_request($request);
     return $self->render_response();
@@ -76,29 +79,37 @@ sub handle_request {
 sub render_request {
     my $request = shift;
     my $action;
-    $action = eval {
+    $action = try {
         Dancer::Renderer->render_file
         || Dancer::Renderer->render_action
+        || Dancer::Renderer->render_autopage
         || Dancer::Renderer->render_error(404);
-    };
-
-    my $value = is_dancer_exception(my $exception = $@);
-    if ($value && $value & E_HALTED) {
-        # special case for halted workflow exception: still render the response
+    } continuation {
+        # workflow exception (continuation)
+        my ($continuation) = @_;
+        $continuation->isa('Dancer::Continuation::Halted')
+          or $continuation->rethrow();
+        # special case for halted workflow continuation: still render the response
         Dancer::Serializer->process_response(Dancer::SharedData->response);
-    } elsif ($exception) {
+    } catch {
+        my ($exception) = @_;
+        Dancer::Factory::Hook->execute_hooks('on_handler_exception', $exception);
         Dancer::Logger::error(
-          'request to ' . $request->path_info . " crashed: $exception");
+            sprintf(
+                'request to %s %s crashed: %s',
+                $request->method, $request->path_info, $exception
+            )
+        );
 
+        # use stringification, to get exception message in case of a
+        # Dancer::Exception
         Dancer::Error->new(
           code    => 500,
           title   => "Runtime Error",
-          message => $exception,
-          $value ? ( exception => $value,
-                     exceptions => { },
-                   ) : (),
+          message => "$exception",
+          exception => $exception,
         )->render();
-    }
+    };
     return $action;
 }
 
@@ -125,7 +136,7 @@ sub init_request_headers {
     Dancer::SharedData->headers($psgi_headers);
 }
 
-# render a PSGI-formated response from a response built by
+# render a PSGI-formatted response from a response built by
 # handle_request()
 sub render_response {
     my $self     = shift;
@@ -142,8 +153,10 @@ sub render_response {
             $response->header( 'Content-Type' => "$ctype; charset=$charset" )
               if $ctype !~ /$charset/;
         }
-        $response->header( 'Content-Length' => length($content) )
-          if !defined $response->header('Content-Length');
+        if (!defined $response->header('Content-Length')) {
+            use bytes; # turn off character semantics
+            $response->header( 'Content-Length' => length($content) );
+        }
         $content = [$content];
     }
     else {
@@ -158,7 +171,7 @@ sub render_response {
       if ( defined Dancer::SharedData->request
         && Dancer::SharedData->request->is_head() );
 
-    # drop content AND content_length if reponse is 1xx or (2|3)04
+    # drop content AND content_length if response is 1xx or (2|3)04
     if ($response->status =~ (/^[23]04$/ )) {
         $content = [''];
         $response->header('Content-Length' => 0);
@@ -181,7 +194,7 @@ sub render_response {
 
 sub _is_text {
     my ($content_type) = @_;
-    return $content_type =~ /(x(?:ht)?ml|text|json|javascript)/;
+    return $content_type =~ /(\bx(?:ht)?ml\b|text|json|javascript)/;
 }
 
 # Fancy banner to print on startup
